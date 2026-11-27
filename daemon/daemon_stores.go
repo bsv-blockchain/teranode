@@ -15,6 +15,7 @@ import (
 	"github.com/bsv-blockchain/teranode/services/validator"
 	"github.com/bsv-blockchain/teranode/settings"
 	"github.com/bsv-blockchain/teranode/stores/blob"
+	"github.com/bsv-blockchain/teranode/stores/blob/metered"
 	"github.com/bsv-blockchain/teranode/stores/blob/options"
 	"github.com/bsv-blockchain/teranode/stores/blob/storetypes"
 	blockchainstore "github.com/bsv-blockchain/teranode/stores/blockchain"
@@ -506,7 +507,7 @@ func (d *Stores) GetTxStore(ctx context.Context, logger ulogger.Logger, appSetti
 
 	var err error
 
-	hashPrefix := 2
+	hashPrefix := storetypes.DefaultHashPrefix(storetypes.TXSTORE)
 	if txStoreURL.Query().Get("hashPrefix") != "" {
 		hashPrefix, err = strconv.Atoi(txStoreURL.Query().Get("hashPrefix"))
 		if err != nil {
@@ -528,6 +529,8 @@ func (d *Stores) GetTxStore(ctx context.Context, logger ulogger.Logger, appSetti
 	if err != nil {
 		return nil, errors.NewServiceError("could not create tx store", err)
 	}
+
+	d.mainTxStore = metered.New("tx", d.mainTxStore)
 
 	if d.wrappers.TxStore != nil {
 		d.mainTxStore = d.wrappers.TxStore(d.mainTxStore)
@@ -552,7 +555,7 @@ func (d *Stores) GetSubtreeStore(ctx context.Context, logger ulogger.Logger, app
 		return nil, errors.NewConfigurationError("subtreestore config not found")
 	}
 
-	hashPrefix := 2
+	hashPrefix := storetypes.DefaultHashPrefix(storetypes.SUBTREESTORE)
 	if subtreeStoreURL.Query().Get("hashPrefix") != "" {
 		hashPrefix, err = strconv.Atoi(subtreeStoreURL.Query().Get("hashPrefix"))
 		if err != nil {
@@ -585,6 +588,8 @@ func (d *Stores) GetSubtreeStore(ctx context.Context, logger ulogger.Logger, app
 	if err != nil {
 		return nil, errors.NewServiceError("could not create subtree store", err)
 	}
+
+	d.mainSubtreeStore = metered.New("subtree", d.mainSubtreeStore)
 
 	if d.wrappers.SubtreeStore != nil {
 		d.mainSubtreeStore = d.wrappers.SubtreeStore(d.mainSubtreeStore)
@@ -635,7 +640,7 @@ func (d *Stores) GetTempStore(ctx context.Context, logger ulogger.Logger, appSet
 
 	var err error
 
-	hashPrefix := 0
+	hashPrefix := storetypes.DefaultHashPrefix(storetypes.TEMPSTORE)
 	if tempStoreURL.Query().Get("hashPrefix") != "" {
 		hashPrefix, err = strconv.Atoi(tempStoreURL.Query().Get("hashPrefix"))
 		if err != nil {
@@ -669,6 +674,8 @@ func (d *Stores) GetTempStore(ctx context.Context, logger ulogger.Logger, appSet
 		return nil, errors.NewServiceError("could not create temp_store", err)
 	}
 
+	d.mainTempStore = metered.New("temp", d.mainTempStore)
+
 	return d.mainTempStore, nil
 }
 
@@ -688,7 +695,7 @@ func (d *Stores) GetBlockStore(ctx context.Context, logger ulogger.Logger, appSe
 
 	var err error
 
-	hashPrefix := -2
+	hashPrefix := storetypes.DefaultHashPrefix(storetypes.BLOCKSTORE)
 
 	if blockStoreURL.Query().Get("hashPrefix") != "" {
 		hashPrefix, err = strconv.Atoi(blockStoreURL.Query().Get("hashPrefix"))
@@ -723,6 +730,8 @@ func (d *Stores) GetBlockStore(ctx context.Context, logger ulogger.Logger, appSe
 		return nil, errors.NewServiceError("could not create block store", err)
 	}
 
+	d.mainBlockStore = metered.New("block", d.mainBlockStore)
+
 	if d.wrappers.BlockStore != nil {
 		d.mainBlockStore = d.wrappers.BlockStore(d.mainBlockStore)
 	}
@@ -746,7 +755,7 @@ func (d *Stores) GetBlockPersisterStore(ctx context.Context, logger ulogger.Logg
 
 	var err error
 
-	hashPrefix := 2
+	hashPrefix := storetypes.DefaultHashPrefix(storetypes.BLOCKPERSISTERSTORE)
 	if blockStoreURL.Query().Get("hashPrefix") != "" {
 		hashPrefix, err = strconv.Atoi(blockStoreURL.Query().Get("hashPrefix"))
 		if err != nil {
@@ -779,6 +788,8 @@ func (d *Stores) GetBlockPersisterStore(ctx context.Context, logger ulogger.Logg
 	if err != nil {
 		return nil, errors.NewServiceError("could not create block persister store", err)
 	}
+
+	d.mainBlockPersisterStore = metered.New("block_persister", d.mainBlockPersisterStore)
 
 	return d.mainBlockPersisterStore, nil
 }

@@ -3,6 +3,7 @@ package aerospike
 
 import (
 	"context"
+	"encoding/binary"
 	"time"
 
 	"github.com/bsv-blockchain/aerospike-client-go/v8"
@@ -262,6 +263,21 @@ func (s *Store) buildSpendOperations(
 		aerospike.ListSetOp(fields.Utxos.String(), int(offset), newUtxo),
 	)
 
+	// Record the spend's block height in the spendHeights bin, as teranode.lua's setSpendHeight
+	// does: 4 little-endian bytes at offset*4, the bin grown to cover them. A spend written without
+	// its height never counts as historical (utxo.IsHistoricalSpend), so a later replay of a
+	// pruned transaction that matches it would be accepted instead of refused. A re-spend that names the same spender fails the first-seen filter and is answered
+	// by the Lua spend, which reports the recorded height. The resize only grows the bin; NoFail
+	// keeps a bin already long enough from failing the call.
+	height := make([]byte, spendHeightSize)
+	binary.LittleEndian.PutUint32(height, currentBlockHeight)
+
+	ops = append(ops,
+		aerospike.BitResizeOp(aerospike.NewBitPolicy(aerospike.BitWriteFlagsNoFail), fields.SpendHeights.String(),
+			(int(offset)+1)*spendHeightSize, aerospike.BitResizeFlagsGrowOnly),
+		aerospike.BitSetOp(aerospike.DefaultBitPolicy(), fields.SpendHeights.String(), int(offset)*spendHeightSize*8, spendHeightSize*8, height),
+	)
+
 	// Increment spentUtxos counter
 	ops = append(ops,
 		aerospike.AddOp(aerospike.NewBin(fields.SpentUtxos.String(), 1)),
@@ -337,7 +353,7 @@ func (s *Store) SpendMultiWithExpressions(ctx context.Context, batch []*batchSpe
 		batchWritePolicy.RecordExistsAction = aerospike.UPDATE_ONLY
 
 		// Build operations
-		blockHeightRetention := s.settings.GetUtxoStoreBlockHeightRetention()
+		blockHeightRetention := s.settings.GetUtxoStoreSpentDeleteRetention()
 		ops := s.buildSpendOperations(
 			offset,
 			bItem.spend.UTXOHash[:],

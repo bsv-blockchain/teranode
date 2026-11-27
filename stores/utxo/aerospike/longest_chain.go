@@ -88,7 +88,7 @@ func (s *Store) MarkTransactionsOnLongestChain(ctx context.Context, txHashes []c
 	// Pre-create the shared operations: identical for every transaction (same bin names, same
 	// values). The aerospike *Operation struct is immutable after creation and only read during
 	// serialization, so sharing one slice across all batch writes is safe.
-	retention := s.settings.GetUtxoStoreBlockHeightRetention()
+	retention := s.settings.GetUtxoStoreSpentDeleteRetention()
 	restampDAH := onLongestChain && retention > 0
 
 	// The backdated unminedSince stamped off the longest chain (see the doc comment).

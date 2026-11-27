@@ -512,6 +512,8 @@ func TestPreserveAndExpire(t *testing.T) {
 	m, err := store.getMaster(parent.TxIDChainHash())
 	require.NoError(t, err)
 	require.NotZero(t, m.deleteAtHeight, "fully spent mined tx should carry a delete-at-height")
+	require.Equal(t, int64(101)+int64(store.settings.GetUtxoStoreBlockHeightRetention())+int64(store.settings.UtxoStore.UnminedTxRetention), m.deleteAtHeight,
+		"a fully spent record is kept for the retention plus the unmined retention after its spend")
 
 	require.NoError(t, store.PreserveTransactions(context.Background(),
 		[]chainhash.Hash{*parent.TxIDChainHash()}, 500))

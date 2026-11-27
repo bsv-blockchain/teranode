@@ -589,6 +589,7 @@ func Test_checkSecretMining(t *testing.T) {
 
 		utxoStore, err := sql.New(ctx, logger, tSettings, utxoStoreURL)
 		require.NoError(t, err)
+		t.Cleanup(func() { _ = utxoStore.Close(context.Background()) })
 
 		_ = utxoStore.SetBlockHeight(110)
 
@@ -631,6 +632,7 @@ func Test_checkSecretMining(t *testing.T) {
 
 		utxoStore, err := sql.New(ctx, logger, tSettings, utxoStoreURL)
 		require.NoError(t, err)
+		t.Cleanup(func() { _ = utxoStore.Close(context.Background()) })
 
 		_ = utxoStore.SetBlockHeight(0)
 
@@ -669,6 +671,7 @@ func Test_checkSecretMining_blockchainClientError(t *testing.T) {
 
 		utxoStore, err := sql.New(ctx, logger, tSettings, utxoStoreURL)
 		require.NoError(t, err)
+		t.Cleanup(func() { _ = utxoStore.Close(context.Background()) })
 
 		_ = utxoStore.SetBlockHeight(100)
 
@@ -1641,11 +1644,16 @@ func TestCatchupIntegrationScenarios(t *testing.T) {
 		)
 
 		// Make multiple calls to trigger the circuit breaker (threshold is 3)
+		start := time.Now()
+
 		for i := 0; i < 3; i++ {
 			result, _, err := server.catchupGetBlockHeaders(ctx, targetBlock, "peer-test-001", "http://test-peer")
 			assert.Error(t, err)
 			assert.NotNil(t, result)
 		}
+
+		// at the 1s default backoff each call waits 1+2+4s; the test context sets 1ms
+		require.Less(t, time.Since(start), 6*time.Second, "blockvalidation_catchup_retry_backoff must reach the header fetch")
 
 		// Check circuit breaker state - should be open after 3 failures
 		cbState := server.peerCircuitBreakers.GetPeerState("peer-test-001")

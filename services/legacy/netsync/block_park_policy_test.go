@@ -397,6 +397,13 @@ func TestParkCommitFailure_AMissingSubtreeFileDropsTheRecordWithoutJudgingIt(t *
 			want: parkDispositionRetryLater,
 		},
 		{
+			// Quick validation's wrap of a failed mined-info merge for txs that already existed.
+			name: "a store fault in the mined-info merge under quick validation's wraps",
+			err: parkCommitChain(errors.NewProcessingError("[createAndSpendUTXOsForBatch][hash] failed to update mined info",
+				errors.NewProcessingError("failed to merge blockID into 1 pre-existing txs", errors.NewStorageError("aerospike timeout")))),
+			want: parkDispositionRetryLater,
+		},
+		{
 			name: "a missing parent block carries code 3 inside code 10 and is the parent's row, not this one",
 			err:  errors.NewProcessingError("failed to get block header for previous block", errors.NewBlockNotFoundError("block not found", errors.ErrNotFound)),
 			want: parkDispositionParentGone,
@@ -437,6 +444,56 @@ func TestParkCommitFailure_AMissingParentOutputKeepsTheBlockAndBlamesNobody(t *t
 
 	fileMiss := parkCommitChain(errors.NewNotFoundError("[readSubtree/hash] failed to get subtree data", errors.ErrNotFound))
 	require.NotEqual(t, parkDispositionLocalUtxoFault, parkCommitFailure(fileMiss), "a missing file is not a missing output")
+}
+
+// TestParkCommitFailure_AMissingFileOutranksAMissingOutput: one failure can
+// name both a missing subtree file and a missing parent output, as a join of
+// two subtrees' errors does. The files go first. Dropping the record makes the
+// sink rewrite them on the next download, and an output that is still missing
+// then lands on the LocalUtxoFault row. Keeping the record for the UTXO fault
+// instead would retry a block whose files are gone for as long as it stays
+// parked, and never download them again.
+func TestParkCommitFailure_AMissingFileOutranksAMissingOutput(t *testing.T) {
+	both := parkCommitChain(errors.Join(
+		errors.NewNotFoundError("[readSubtree/hash] failed to get subtree data", errors.ErrNotFound),
+		errors.NewTxNotFoundError("output %d of %s not found", 0, "abcd"),
+	))
+
+	require.True(t, errors.Is(both, errors.ErrTxNotFound), "fixture: the failure carries the missing output")
+	require.Equal(t, parkDispositionFilesGone, parkCommitFailure(both))
+
+	withReplay := parkCommitChain(errors.Join(
+		errors.NewNotFoundError("[readSubtree/hash] failed to get subtree data", errors.ErrNotFound),
+		errors.NewUtxoSpendingTxPrunedError("[Spend] invalid spend for %s:%d: spending transaction was pruned", "ef01", 0),
+	))
+	require.Equal(t, parkDispositionFilesGone, parkCommitFailure(withReplay), "and the pruned-replay answer")
+}
+
+// TestParkCommitFailure_APrunedReplayAnswerIsALocalUtxoFault: the marker
+// answer a replay of a pruned transaction gets is the sibling of the code-30
+// miss above, and lands on the same row when it reaches the table unwrapped.
+// Below the checkpoint the block is certified, so the replay says the store is
+// ahead of the chain, not that the peer sent a bad block.
+func TestParkCommitFailure_APrunedReplayAnswerIsALocalUtxoFault(t *testing.T) {
+	replay := parkCommitChain(errors.NewProcessingError("transaction %s could not be applied", "abcd",
+		errors.NewUtxoSpendingTxPrunedError("[Spend] invalid spend for %s:%d: spending transaction was pruned", "ef01", 0)))
+
+	d := parkCommitFailure(replay)
+	require.Equal(t, parkDispositionLocalUtxoFault, d)
+	require.False(t, d.markFailed, "the block is canonical below the checkpoint")
+	require.False(t, d.blamePeer, "the peer sent a good block")
+
+	// The full route wraps the store's answer in a ServiceError. It is still
+	// this node's UTXO fault, so the drain stamps it and waits before the next
+	// try instead of re-dispatching it on every turn. A verdict that happens to
+	// wrap the answer stays a verdict, and so does a corrupt body.
+	pruned := errors.NewUtxoSpendingTxPrunedError("[Spend] invalid spend for %s:%d: spending transaction was pruned", "ef01", 0)
+	require.Equal(t, parkDispositionLocalUtxoFault, parkCommitFailure(parkCommitChain(errors.NewServiceError("[processBlockFound] failed", pruned))),
+		"the full route's ServiceError wrap is this node's UTXO fault, not a transient retry")
+	require.Equal(t, parkDispositionRecordCorrupt, parkCommitFailure(parkCommitChain(errors.NewBlockCorruptError("[processBlockFound] corrupt", pruned))),
+		"a corrupt body that wraps the answer is still corrupt")
+	require.Equal(t, parkDispositionBlockInvalid, parkCommitFailure(parkCommitChain(errors.NewBlockInvalidError("[ValidateBlock] invalid", pruned))),
+		"a verdict that wraps the answer is still a verdict")
 }
 
 // TestParkCommitFailure_TheFullRoutesInvalidTransactionVerdictIsAJudgement pins

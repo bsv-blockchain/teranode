@@ -2,10 +2,14 @@ package sql
 
 import (
 	"context"
+	"fmt"
 	"testing"
+	"time"
 
 	"github.com/bsv-blockchain/go-bt/v2"
+	"github.com/bsv-blockchain/go-bt/v2/bscript"
 	"github.com/bsv-blockchain/go-bt/v2/chainhash"
+	"github.com/bsv-blockchain/teranode/errors"
 	utxostore "github.com/bsv-blockchain/teranode/stores/utxo"
 	"github.com/bsv-blockchain/teranode/stores/utxo/pruner"
 	"github.com/bsv-blockchain/teranode/stores/utxo/tests"
@@ -62,7 +66,7 @@ func horizonStore(ctx context.Context, t *testing.T) (*Store, pruner.Service, ui
 	require.NoError(t, err)
 	prunerSvc.Start(ctx)
 
-	retention := store.settings.GetUtxoStoreBlockHeightRetention()
+	retention := store.settings.GetUtxoStoreSpentDeleteRetention()
 	require.NotZero(t, retention, "retention must be configured for this test to mean anything")
 
 	// tests.Tx spends tests.ParentTx; the parent must exist for SetConflicting to
@@ -334,4 +338,185 @@ func TestPruneHorizon_MinedThenConflictingDoesNotStampFromLaggingTip(t *testing.
 
 	_, err = store.Get(ctx, txHash)
 	require.Error(t, err, "tx must be pruned at tip %d (mined_height + retention)", tip)
+}
+
+// TestPruneHorizon_DefensiveKeepsParentOfChildInsideSafetyWindow: in defensive
+// mode a parent past its delete height is deleted only once every child that
+// spends it is mined at least the safety window below the prune height. P is
+// mined and fully spent by C. At P's delete height, a C mined one block inside
+// the window keeps P, and a C mined exactly at the window's edge lets P go. A
+// window passed as zero would take P in both cases.
+func TestPruneHorizon_DefensiveKeepsParentOfChildInsideSafetyWindow(t *testing.T) {
+	for _, tc := range []struct {
+		name string
+		// depthBelowWindow is how many blocks below the window's edge C is mined; -1
+		// puts it one block inside the window.
+		depthBelowWindow int
+		kept             bool
+	}{
+		{name: "child mined inside the window", depthBelowWindow: -1, kept: true},
+		{name: "child mined at the window's edge", depthBelowWindow: 0, kept: false},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			ctx := t.Context()
+
+			ResetPrunerServiceForTests()
+			t.Cleanup(ResetPrunerServiceForTests)
+
+			store, _ := setup(ctx, t)
+			store.settings.Pruner.UTXODefensiveEnabled = true
+
+			provider, ok := any(store).(pruner.PrunerServiceProvider)
+			require.True(t, ok)
+
+			prunerSvc, err := provider.GetPrunerService()
+			require.NoError(t, err)
+
+			// NewService falls back to the global retention when no window is given,
+			// and the store gives none.
+			window := store.settings.GlobalBlockHeightRetention
+			require.NotZero(t, window, "the safety window must be non-zero for this test to mean anything")
+
+			const parentHeight uint32 = 1000
+
+			require.NoError(t, store.SetBlockHeight(parentHeight))
+
+			parent := bt.NewTx()
+			require.NoError(t, parent.From("5555555555555555555555555555555555555555555555555555555555555555", 0, "51", 30000))
+			parent.Inputs[0].UnlockingScript = bscript.NewFromBytes([]byte{0x51})
+			require.NoError(t, parent.PayToAddress("1A1zP1eP5QGefi2DMPTfTL5SLmv7DivfNa", 4000))
+
+			_, err = store.Create(ctx, parent, parentHeight)
+			require.NoError(t, err)
+
+			child := bt.NewTx()
+			require.NoError(t, child.From(parent.TxID(), 0, parent.Outputs[0].LockingScript.String(), parent.Outputs[0].Satoshis))
+			child.Inputs[0].UnlockingScript = bscript.NewFromBytes([]byte{0x51})
+			require.NoError(t, child.PayToAddress("1A1zP1eP5QGefi2DMPTfTL5SLmv7DivfNa", 3000))
+
+			_, _, err = store.SpendAndCreate(ctx, child, parentHeight)
+			require.NoError(t, err)
+
+			_, err = store.SetMinedMulti(ctx, []*chainhash.Hash{parent.TxIDChainHash()}, utxostore.MinedBlockInfo{
+				BlockID: 1000, BlockHeight: parentHeight, OnLongestChain: true,
+			})
+			require.NoError(t, err)
+
+			var dah *uint32
+
+			require.NoError(t, store.db.QueryRowContext(ctx,
+				"SELECT delete_at_height FROM transactions WHERE hash = $1", parent.TxIDChainHash()[:]).Scan(&dah))
+			require.NotNil(t, dah, "fixture: the mined, fully spent parent has a delete height")
+
+			pruneHeight := *dah
+			childHeight := uint32(int64(pruneHeight) - int64(window) - int64(tc.depthBelowWindow))
+			require.GreaterOrEqual(t, childHeight, parentHeight, "fixture: the child is mined no lower than its parent")
+
+			_, err = store.SetMinedMulti(ctx, []*chainhash.Hash{child.TxIDChainHash()}, utxostore.MinedBlockInfo{
+				BlockID: 1001, BlockHeight: childHeight, OnLongestChain: true,
+			})
+			require.NoError(t, err)
+
+			require.NoError(t, store.SetBlockHeight(pruneHeight))
+
+			_, err = prunerSvc.Prune(ctx, pruneHeight, "<defensive-window>")
+			require.NoError(t, err)
+
+			_, err = store.Get(ctx, parent.TxIDChainHash())
+			if tc.kept {
+				require.NoError(t, err, "a parent whose child was mined at %d, inside the %d-block window below %d, must be kept", childHeight, window, pruneHeight)
+			} else {
+				require.ErrorIs(t, err, errors.ErrTxNotFound, "a parent whose child was mined at %d, %d blocks below %d, must be deleted", childHeight, window, pruneHeight)
+			}
+		})
+	}
+}
+
+// A child that spends its parent while unmined and is mined up to unminedTxRetention blocks
+// later must keep the parent for a full retention after its own block, so a reorg that moves
+// that block back still finds the parent. Later children are covered by parent preservation.
+func TestPruneHorizon_ParentOutlivesChildMinedLate(t *testing.T) {
+	const (
+		retention       uint32 = 8
+		unminedRetained uint32 = 4
+		spendHeight     uint32 = 1000 // the child's unmined_since; the tip is spendHeight - 1
+	)
+
+	for _, backend := range heightBackends() {
+		for _, parentMinedFirst := range []bool{true, false} {
+			for delay := uint32(0); delay <= unminedRetained+2; delay++ {
+				name := fmt.Sprintf("%s/parentMinedFirst=%t/minedAfter=%d", backend.name, parentMinedFirst, delay)
+				t.Run(name, func(t *testing.T) {
+					store, ctx := backend.build(t)
+					ctx, cancel := context.WithTimeout(ctx, time.Minute)
+					defer cancel()
+
+					store.settings.GlobalBlockHeightRetention = retention
+					store.settings.UtxoStore.BlockHeightRetentionAdjustment = 0
+					store.settings.UtxoStore.UnminedTxRetention = unminedRetained
+
+					ResetPrunerServiceForTests()
+					t.Cleanup(ResetPrunerServiceForTests)
+
+					prunerSvc, err := store.GetPrunerService()
+					require.NoError(t, err)
+
+					parent := bt.NewTx()
+					require.NoError(t, parent.From(fmt.Sprintf("%064x", 0xabc000+int(delay)*2+map[bool]int{true: 1}[parentMinedFirst]), 0, "51", 30000))
+					parent.Inputs[0].UnlockingScript = bscript.NewFromBytes([]byte{0x51})
+					require.NoError(t, parent.PayToAddress("1A1zP1eP5QGefi2DMPTfTL5SLmv7DivfNa", 20000))
+
+					child := bt.NewTx()
+					require.NoError(t, child.From(parent.TxID(), 0, parent.Outputs[0].LockingScript.String(), parent.Outputs[0].Satoshis))
+					child.Inputs[0].UnlockingScript = bscript.NewFromBytes([]byte{0x51})
+					require.NoError(t, child.PayToAddress("1A1zP1eP5QGefi2DMPTfTL5SLmv7DivfNa", 10000))
+
+					parentMinedAt := spendHeight - 10
+					if !parentMinedFirst {
+						parentMinedAt = spendHeight
+					}
+
+					require.NoError(t, store.SetBlockHeight(spendHeight-1))
+					_, _, err = store.SpendAndCreate(ctx, parent, spendHeight-10, utxostore.WithCreateOnly())
+					require.NoError(t, err)
+
+					if parentMinedFirst {
+						_, err = store.SetMinedMulti(ctx, []*chainhash.Hash{parent.TxIDChainHash()},
+							utxostore.MinedBlockInfo{BlockID: parentMinedAt, BlockHeight: parentMinedAt, OnLongestChain: true})
+						require.NoError(t, err)
+					}
+
+					_, _, err = store.SpendAndCreate(ctx, child, spendHeight)
+					require.NoError(t, err)
+
+					childMinedAt := spendHeight + delay
+					lastTip := childMinedAt + retention - 1
+
+					for tip := spendHeight; tip <= lastTip; tip++ {
+						require.NoError(t, store.SetBlockHeight(tip))
+
+						if !parentMinedFirst && tip == parentMinedAt {
+							_, err = store.SetMinedMulti(ctx, []*chainhash.Hash{parent.TxIDChainHash()},
+								utxostore.MinedBlockInfo{BlockID: tip, BlockHeight: tip, OnLongestChain: true})
+							require.NoError(t, err)
+						}
+
+						if tip == childMinedAt {
+							_, err = store.SetMinedMulti(ctx, []*chainhash.Hash{child.TxIDChainHash()},
+								utxostore.MinedBlockInfo{BlockID: tip + 1, BlockHeight: tip, OnLongestChain: true})
+							require.NoError(t, err)
+						}
+
+						_, err = utxostore.PreserveParentsOfOldUnminedTransactions(ctx, store, tip, "<late-child>", store.settings, store.logger)
+						require.NoError(t, err)
+						_, err = prunerSvc.Prune(ctx, tip, "<late-child>")
+						require.NoError(t, err)
+
+						_, err = store.Get(ctx, parent.TxIDChainHash())
+						require.NoError(t, err, "the parent of a child mined at %d was pruned at tip %d, inside the child's retention", childMinedAt, tip)
+					}
+				})
+			}
+		}
+	}
 }

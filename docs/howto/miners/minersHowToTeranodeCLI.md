@@ -26,6 +26,7 @@ Usage: teranode-cli <command> [options]
     export-blocks        Export blockchain to CSV
     filereader           File Reader
     fix-chainwork        Fix incorrect chainwork values in blockchain database
+    free-spent-output    Free one output still spent by a transaction the UTXO store has no record of (the error 78 stall; see --help)
     getfsmstate          Get the current FSM State
     import-blocks        Import blockchain from CSV
     loadunminedbench     Benchmark loadUnminedTransactions with CPU and memory profiling
@@ -111,6 +112,9 @@ Usage: teranode-cli <command> [options]
 | `audit-mined-set`    | List blocks stored with mined_set true whose   | `--start-height` - First height to audit (default: 0)           |
 |                      | sampled transactions lack the block ID or are  | `--end-height` - Last height to audit (required)                |
 |                      | still locked (read-only; remedy is a resync)   | `--max-blocks` - Refuse a wider range (default: 10000)          |
+| `free-spent-output`  | Free one output still spent by a transaction   | `--parent` - Parent transaction id (required)                    |
+|                      | the store has no record of (error 78 stall;    | `--vout` - Output index (default: 0)                             |
+|                      | see docs/topics/stores/utxo.md first)          | `--spender` - Spender transaction id (required)                  |
 | `prepare-lane-schema`| Install the UTXO store's lane columns, empty,  | none                                                             |
 |                      | at lane migration step off (node must be       |                                                                  |
 |                      | stopped; run as the tables' owner)             |                                                                  |
@@ -285,6 +289,14 @@ teranode-cli resetblockassembly [--full-reset]
 ```
 
 Resets the block assembly state. Useful for clearing stuck transactions or resetting mining state.
+
+It is also the only way out of a deep reorg halt. When a reorg moves back at least the UTXO store
+retention, block assembly stops serving mining candidates, logs `MANUAL INTERVENTION REQUIRED` and
+sets `teranode_blockassembly_deep_reorg_halted` to 1, because the transactions the reorg returns to
+the mempool may spend parents the pruner already deleted. About 20 blocks later
+(`blockvalidation_maxBlocksBehindBlockAssembly`) block validation and the pruner stop as well, so
+the node stops following the chain. The halt survives a restart. Running `resetblockassembly` accepts that loss: it moves block assembly to
+the best block, reloads the mempool from the store, drops what it cannot find and lifts the halt.
 
 Options:
 

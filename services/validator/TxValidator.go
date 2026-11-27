@@ -82,8 +82,10 @@ type TxValidatorI interface {
 	//   - tx: The transaction to validate
 	//   - blockHeight: Height of the block being validated
 	//   - utxoHeights: Block heights where each input UTXO was created
-	//   - utxoMTPs: Median Time Past values for each UTXO height (stored_mtp(utxoHeight))
-	//   - blockMTP: Median Time Past for the block (stored_mtp(blockHeight-1))
+	//   - utxoMTPs: each input's coin time: stored_mtp(utxoHeight), the candidate branch's value
+	//     for a coin on a side branch (Options.CandidateForkMTPs), or blockMTP for a coin at or
+	//     above blockHeight
+	//   - blockMTP: the candidate parent's median time past (Options.CandidateParentMedianTime)
 	// Returns:
 	//   - error: Validation error if sequence locks are not satisfied, nil on success
 	ValidateBIP68(tx *bt.Tx, blockHeight uint32, utxoHeights []uint32, utxoMTPs []uint32, blockMTP uint32) error

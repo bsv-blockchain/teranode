@@ -20,6 +20,7 @@ import (
 	"github.com/bsv-blockchain/teranode/stores/utxo/tests"
 	"github.com/bsv-blockchain/teranode/ulogger"
 	"github.com/bsv-blockchain/teranode/util"
+	"github.com/bsv-blockchain/teranode/util/lane"
 	"github.com/bsv-blockchain/teranode/util/test"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/mock"
@@ -335,9 +336,14 @@ func Benchmark_txMetaCache_GetMetaCached(b *testing.B) {
 type decoratingNullStore struct {
 	*nullstore.NullStore
 	metaData *meta.Data
+	err      error
 }
 
 func (s *decoratingNullStore) BatchDecorate(_ context.Context, items []*utxo.UnresolvedMetaData, _ ...fields.FieldName) error {
+	if s.err != nil {
+		return s.err
+	}
+
 	for _, it := range items {
 		if it == nil {
 			continue
@@ -927,6 +933,30 @@ func TestBatchDecorate_DoesNotCachePartialInpoints(t *testing.T) {
 
 	_, found := cache.GetMetaCached(ctx, h)
 	require.False(t, found, "BatchDecorate must not cache a partial (inpoints-less) non-coinbase meta")
+
+	require.NoError(t, cache.BatchDecorate(ctx, items))
+
+	_, found = cache.GetMetaCached(ctx, h)
+	require.False(t, found, "nor read whole: a non-coinbase always has a parent, so its inpoints are missing")
+
+	// A coinbase has no parents either way: the parent prefetch at lane shadow reads its flag and
+	// not its inpoints, which is partial too. Read whole, it is cached.
+	partial.IsCoinbase = true
+
+	err = cache.BatchDecorate(ctx, items, fields.BlockIDs, fields.BlockHeights, fields.Outputs, fields.LanePosition, fields.IsCoinbase)
+	require.NoError(t, err)
+
+	_, found = cache.GetMetaCached(ctx, h)
+	require.False(t, found, "BatchDecorate must not cache a coinbase meta read without its inpoints")
+
+	// Read whole, or with its inpoints named, it is cached.
+	for i, read := range [][]fields.FieldName{nil, {fields.BlockIDs, fields.TxInpoints}} {
+		h := chainhash.HashH([]byte{byte(i)})
+		require.NoError(t, cache.BatchDecorate(ctx, []*utxo.UnresolvedMetaData{{Hash: h}}, read...))
+
+		_, found = cache.GetMetaCached(ctx, h)
+		require.True(t, found, "a coinbase read with fields %v is cached", read)
+	}
 }
 
 // TestBatchDecorate_CachesCompleteInpoints is the positive counterpart: a meta
@@ -966,6 +996,10 @@ func TestBatchDecorate_CachesCompleteInpoints(t *testing.T) {
 	cached, found := cache.GetMetaCached(ctx, h)
 	require.True(t, found, "BatchDecorate must cache a complete meta")
 	require.Len(t, cached.TxInpoints.ParentTxHashes, 1)
+
+	store.err = errors.NewStorageError("batch decorate failed")
+	require.Error(t, cache.BatchDecorate(ctx, []*utxo.UnresolvedMetaData{{Hash: chainhash.HashH([]byte("failed-batchdecorate"))}}),
+		"the store's error is returned")
 }
 
 func Test_TxMetaCache_MiningOperations(t *testing.T) {
@@ -1333,5 +1367,72 @@ func TestTxMetaCache_ConflictingTxHashesAsksTheStore(t *testing.T) {
 		require.Equal(t, store.hashes, hashes)
 		require.Equal(t, store.indexed, indexed)
 		require.Equal(t, store.err, err)
+	}
+}
+
+// GetMeta reads no lane position, so at shadow a miss caches nothing: the entry would be a hit
+// without the position, and the subtree's lane bitmaps would leave the transaction out. At off it
+// caches the entry as before. An entry already cached with its position keeps it.
+func Test_txMetaCache_GetMetaAtShadowCachesNoEntryWithoutAPosition(t *testing.T) {
+	ctx := context.Background()
+
+	stored := &meta.Data{Fee: 1, SizeInBytes: 1, TxInpoints: subtree.NewTxInpointsFromPacked([]chainhash.Hash{{0x09}}, []uint32{1, 0})}
+
+	cached := func(t *testing.T, c *TxMetaCache, h chainhash.Hash) (CachedMeta, bool) {
+		t.Helper()
+
+		out, found := make([]CachedMeta, 1), make([]bool, 1)
+		_, err := c.GetMetaCachedInto(ctx, []chainhash.Hash{h}, nil, out, found)
+		require.NoError(t, err)
+
+		return out[0], found[0]
+	}
+
+	withPosition := *stored
+	withPosition.LanePosition = lane.Pack(8, 14)
+
+	for _, tc := range []struct {
+		name   string
+		mode   settings.LaneMigration
+		read   *meta.Data
+		cached bool
+	}{
+		{name: "off", mode: settings.LaneMigrationOff, read: stored, cached: true},
+		{name: "shadow", mode: settings.LaneMigrationShadow, read: stored, cached: false},
+		{name: "shadow, the position read with it", mode: settings.LaneMigrationShadow, read: &withPosition, cached: true},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			tSettings := test.CreateBaseTestSettings(t)
+			tSettings.UtxoStore.LaneMigration = tc.mode
+
+			store := &utxo.MockUtxostore{}
+			store.On("GetMeta", mock.Anything, mock.Anything, mock.Anything).Return(tc.read)
+
+			s, err := NewTxMetaCache(ctx, tSettings, ulogger.TestLogger{}, store, Unallocated)
+			require.NoError(t, err)
+
+			c := s.(*TxMetaCache)
+
+			h := chainhash.Hash{0x01}
+			require.NoError(t, c.GetMeta(ctx, &h, &meta.Data{}))
+
+			got, found := cached(t, c, h)
+			require.Equal(t, tc.cached, found)
+
+			if found {
+				require.Equal(t, tc.read.LanePosition, got.LanePosition)
+			}
+
+			// An entry cached with its position, as the Kafka handler stores it, is a hit: GetMeta
+			// leaves it, position and all.
+			positioned := chainhash.Hash{0x02}
+			require.NoError(t, c.SetCache(&positioned, &withPosition))
+
+			require.NoError(t, c.GetMeta(ctx, &positioned, &meta.Data{}))
+
+			got, found = cached(t, c, positioned)
+			require.True(t, found)
+			require.Equal(t, lane.Pack(8, 14), got.LanePosition)
+		})
 	}
 }

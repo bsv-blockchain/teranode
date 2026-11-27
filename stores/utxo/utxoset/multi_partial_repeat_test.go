@@ -18,6 +18,8 @@ import (
 // up, a repeat writes the child, and both its spends name it. Quick validation repeats the child
 // with its parent; the child alone must work too.
 func TestSpendAndCreateMultiRepeatOfAFailedChild(t *testing.T) {
+	parallelOnOwnDatabase(t)
+
 	for _, withParent := range []bool{true, false} {
 		name := "child alone"
 		if withParent {

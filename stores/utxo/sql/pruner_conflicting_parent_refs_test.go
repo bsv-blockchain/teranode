@@ -85,6 +85,16 @@ func TestPrunerClearsParentRefsOfReapedConflictingLoser(t *testing.T) {
 			if defensive {
 				require.Nil(t, after.SpendingData, "a surviving parent must not name the reaped loser as its spender")
 				require.Equal(t, 0, countChildRefs(), "a surviving parent must not list the reaped loser as a conflicting child")
+
+				// A height left behind would be read as the next spend's when that spend writes none
+				// (an older build's spend, or Create inserting spending_data), and could make it
+				// look like history.
+				var spendingHeight sql.NullInt64
+
+				require.NoError(t, store.db.QueryRowContext(ctx, `
+					SELECT spending_height FROM outputs
+					WHERE transaction_id = (SELECT id FROM transactions WHERE hash = $1) AND idx = 0`, parent.TxIDChainHash()[:]).Scan(&spendingHeight))
+				require.False(t, spendingHeight.Valid, "the reap must clear the height of the spend it removes")
 			} else {
 				require.NotNil(t, after.SpendingData, "default mode keeps the existing behaviour")
 			}
@@ -441,6 +451,8 @@ func TestPrunerReapClearsTheDeleteHeightOfAParentItUnspends(t *testing.T) {
 // end instead of landing after the count and restoring a parent spend of a record the reap then deletes. The
 // reap is parked on a parent output row after it took the table lock, so the test exercises the production lock.
 func TestReapConflictingHoldsTheIntentLockUntilCommit_Postgres(t *testing.T) {
+	parallelPostgres(t)
+
 	if testing.Short() {
 		t.Skip("skipping Postgres integration test in short mode")
 	}
@@ -494,7 +506,7 @@ func TestReapConflictingHoldsTheIntentLockUntilCommit_Postgres(t *testing.T) {
 
 		require.NoError(t, store.db.QueryRowContext(ctx, `
 			SELECT count(*) FROM pg_stat_activity
-			WHERE wait_event_type = 'Lock' AND query LIKE '%UPDATE outputs%' AND query NOT LIKE '%pg_stat_activity%'`).Scan(&waiting))
+			WHERE datname = current_database() AND wait_event_type = 'Lock' AND query LIKE '%UPDATE outputs%' AND query NOT LIKE '%pg_stat_activity%'`).Scan(&waiting))
 
 		return waiting == 1
 	}, 10*time.Second, 50*time.Millisecond, "the reap must park on the parent output row after it took the table lock")

@@ -14,6 +14,29 @@
 //
 // The SQL store can be configured with different caching strategies and
 // performance settings based on the deployment requirements.
+// Package sql implements the ledger store on a SQL database.
+//
+// Three mechanisms in this package are written for a topology no deployment
+// in this repository currently runs - more than one Blockchain process
+// against one database:
+//
+//   - the durable block-ID reservation table (assign_block_id.go), whose
+//     entries "survive ttlcache TTL expiry, restart, and a second instance";
+//   - the fixed advisory lock serialising schema creation (createPostgresSchema,
+//     a number two processes must agree on);
+//   - the catalog-probe fast path that keeps a concurrent instance's
+//     on_main_chain rebuild from queuing every reader behind DDL locks
+//     (the cascade described at createPostgresSchema, rebuilt from an incident).
+//
+// They are not speculative. The in-process halves of the same races are
+// real in a single instance - two ingestion paths (legacy netsync and
+// catch-up) can bring the same block in during IBD, and reservations must
+// survive a restart to keep promised ids honest across it - so the table
+// and the probe pay their way even where only one process runs. What they
+// additionally buy is readiness for multi-instance operation; whether that
+// topology is actually coming is open question 59 (reconciliation notes
+// section 83), and if the answer is no, the cross-process layers can be
+// simplified - deliberately, with this comment removed.
 package sql
 
 import (
@@ -237,10 +260,13 @@ type SQL struct {
 	// The fast extend path (parent == preBest, atomic INSERT, won the
 	// maxBlockID CAS) does NOT take this mutex.
 	slowPathMu sync.Mutex
-	// blockTimestampCache is a sliding-window cache of recent block timestamps,
-	// eliminating per-block SQL queries in calculateMedianTimePastForHeight during
-	// sequential block processing (seeder, catchup). Cleared on fork detection/invalidation.
+	// blockTimestampCache holds recent blocks' timestamps by block ID, each with its parent's
+	// ID, so calculateMedianTimePastForHeight follows parent links in memory instead of
+	// querying SQL for every stored block during sync.
 	blockTimestampCache *blockTimestampCache
+	// parentWalkQueries counts the median-time parent walks that went to SQL because the cache
+	// missed. Exposed for tests that check stored blocks read the cache.
+	parentWalkQueries atomic.Uint64
 	// bestBlockIDQueries counts how many times getBestBlockID has hit the database
 	// (cache misses only). Exposed for tests to catch regressions that reintroduce
 	// unnecessary per-block Postgres round-trips in the StoreBlock hot path.

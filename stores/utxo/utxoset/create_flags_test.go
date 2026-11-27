@@ -21,6 +21,8 @@ import (
 // carried on, which is how consensus bugs start. The store-agnostic conformance suite
 // caught it; nothing else did, and that suite is switched off by default.
 func TestCreateHonoursStateFlags(t *testing.T) {
+	parallelOnOwnDatabase(t)
+
 	for _, tc := range []struct {
 		name string
 		opt  utxo.CreateOption

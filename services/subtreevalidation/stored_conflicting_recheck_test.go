@@ -154,13 +154,13 @@ func TestBlockPathRechecksStoredConflictingTxs(t *testing.T) {
 		checker, ok := f.recorder.Interface.(validator.BlockBatchChecker)
 		require.True(t, ok)
 
-		return f.server.processTransactionsBatched(t.Context(), checker, []*bt.Tx{tx.Clone(), f.other.Clone()}, chainhash.Hash{}, 101, 0, 0, map[uint32]bool{})
+		return f.server.processTransactionsBatched(t.Context(), checker, []*bt.Tx{tx.Clone(), f.other.Clone()}, chainhash.Hash{}, 101, 0, 0, candidateForkMTPs{}, map[uint32]bool{})
 	}
 
 	// the level path runs before CheckBlockSubtrees validates each subtree, and on its own for the
 	// batched path's fallbacks
 	viaLevels := func(t *testing.T, f *conflictingFixture, tx *bt.Tx) error {
-		return f.server.processTransactionsInLevels(t.Context(), []*bt.Tx{tx.Clone(), f.other.Clone()}, chainhash.Hash{}, chainhash.Hash{}, 101, 0, 0, map[uint32]bool{}, false)
+		return f.server.processTransactionsInLevels(t.Context(), []*bt.Tx{tx.Clone(), f.other.Clone()}, chainhash.Hash{}, chainhash.Hash{}, 101, 0, 0, candidateForkMTPs{}, map[uint32]bool{}, false)
 	}
 
 	entryPoints := map[string]entryPoint{

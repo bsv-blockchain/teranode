@@ -2,7 +2,6 @@ package consensus
 
 import (
 	"fmt"
-	"path/filepath"
 	"testing"
 
 	"github.com/bsv-blockchain/go-bt/v2"
@@ -10,128 +9,6 @@ import (
 	"github.com/bsv-blockchain/go-bt/v2/chainhash"
 	"github.com/stretchr/testify/require"
 )
-
-// TestScriptValidationWithValidators runs script tests through all validators
-func TestScriptValidationWithValidators(t *testing.T) {
-	testFile := filepath.Join(GetTestDataPath(), "script_tests.json")
-	tests := LoadScriptTests(t, testFile)
-
-	parser := NewScriptParser()
-	validator := NewValidatorIntegration()
-
-	// Statistics
-	stats := struct {
-		total      int
-		parsed     int
-		skipped    int
-		validated  int
-		allAgree   int
-		disagreed  int
-		expectedOK int
-		actualOK   int
-	}{}
-
-	// Test first 100 scripts for now
-	maxTests := 100
-	if len(tests) > maxTests {
-		tests = tests[:maxTests]
-	}
-
-	for i, test := range tests {
-		stats.total++
-
-		testName := fmt.Sprintf("Script_%d", i)
-		if test.Comment != "" {
-			testName = fmt.Sprintf("%s_%s", testName, test.Comment)
-		}
-
-		t.Run(testName, func(t *testing.T) {
-			// Parse scripts
-			sigBytes, err := parser.ParseScript(test.ScriptSig)
-			if err != nil {
-				t.Logf("Failed to parse scriptSig '%s': %v", test.ScriptSig, err)
-				stats.skipped++
-				t.Skip("Script parsing failed")
-				return
-			}
-
-			pubKeyBytes, err := parser.ParseScript(test.ScriptPubKey)
-			if err != nil {
-				t.Logf("Failed to parse scriptPubKey '%s': %v", test.ScriptPubKey, err)
-				stats.skipped++
-				t.Skip("Script parsing failed")
-				return
-			}
-
-			stats.parsed++
-
-			// Create a transaction for validation
-			tx := createTestTransaction(sigBytes, pubKeyBytes)
-
-			// Run validation with all validators
-			results := validator.ValidateWithAllValidators(tx, 0, []uint32{0})
-			stats.validated++
-
-			// Check if all validators agree
-			allAgree, differences := CompareResults(results)
-			if allAgree {
-				stats.allAgree++
-			} else {
-				stats.disagreed++
-				t.Logf("Validator disagreement: %s", differences)
-			}
-
-			// Check against expected result
-			expectOK := test.Expected == "OK"
-			if expectOK {
-				stats.expectedOK++
-			}
-
-			// For now, consider validation successful if at least one validator says OK
-			actualOK := false
-			for _, result := range results {
-				if result.Success {
-					actualOK = true
-					break
-				}
-			}
-
-			if actualOK {
-				stats.actualOK++
-			}
-
-			// Log results
-			t.Logf("ScriptSig: %s -> %x", test.ScriptSig, sigBytes)
-			t.Logf("ScriptPubKey: %s -> %x", test.ScriptPubKey, pubKeyBytes)
-			t.Logf("Expected: %s, Actual OK: %v", test.Expected, actualOK)
-
-			// Log individual validator results
-			for validatorType, result := range results {
-				status := "OK"
-				if !result.Success {
-					status = fmt.Sprintf("FAIL: %v", result.Error)
-				}
-				t.Logf("  %s: %s", validatorType, status)
-			}
-
-			// Don't fail the test yet, we're gathering statistics
-			if !allAgree {
-				t.Logf("WARNING: Validators disagree on this test")
-			}
-		})
-	}
-
-	// Print statistics
-	t.Logf("\n=== Script Validation Statistics ===")
-	t.Logf("Total tests: %d", stats.total)
-	t.Logf("Successfully parsed: %d", stats.parsed)
-	t.Logf("Skipped (parse error): %d", stats.skipped)
-	t.Logf("Validated: %d", stats.validated)
-	t.Logf("All validators agree: %d", stats.allAgree)
-	t.Logf("Validators disagree: %d", stats.disagreed)
-	t.Logf("Expected OK: %d", stats.expectedOK)
-	t.Logf("Actual OK (any validator): %d", stats.actualOK)
-}
 
 // createTestTransaction creates a transaction for script validation testing
 func createTestTransaction(sigScript, pubKeyScript []byte) *bt.Tx {

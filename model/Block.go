@@ -138,8 +138,9 @@ type Block struct {
 	// blockvalidation service sets this (via SetNodeAllocator); model-internal
 	// callers leave it nil and behaviour matches legacy make() allocation.
 	nodeAllocator subtreepkg.NodeAllocator
-	// checkpointConfirmedAncestor records whether this block is provably an ancestor of the
-	// stored block with the highest hardcoded checkpoint hash, by its stored headers. It is
+	// checkpointConfirmedAncestor records whether this block is provably tied to a hardcoded
+	// checkpoint hash: an ancestor of the stored checkpoint block by its stored headers, or
+	// header-proven by legacy sync. It is
 	// the caller-supplied ancestry predicate that, together with store fast-path support,
 	// gates the below-checkpoint coinbase no-inflation skip in checkBlockRewardAndFees.
 	// Only the blockvalidation service sets it (via SetCheckpointConfirmedAncestor); it
@@ -166,8 +167,9 @@ func (b *Block) NodeAllocator() subtreepkg.NodeAllocator {
 	return b.nodeAllocator
 }
 
-// SetCheckpointConfirmedAncestor records whether this block is provably an ancestor of the
-// stored block with the highest hardcoded checkpoint hash, by its stored headers.
+// SetCheckpointConfirmedAncestor records whether this block is provably tied to a hardcoded
+// checkpoint hash: an ancestor of the stored checkpoint block by its stored headers, or
+// header-proven by legacy sync.
 // Only the blockvalidation service sets this (from BlockValidation.checkpointConfirmed-
 // Ancestor); it is the caller-supplied ancestry predicate that gates the below-checkpoint
 // coinbase no-inflation skip in checkBlockRewardAndFees. Leaving it unset (false) forces
@@ -1486,9 +1488,9 @@ func (b *Block) closeDeferredLocked() error {
 //     replaced the old SQL-store restriction;
 //   - the block is a confirmed ancestor of the pinned checkpoint
 //     (b.checkpointConfirmedAncestor, set only by the blockvalidation service via
-//     SetCheckpointConfirmedAncestor; defaults false). This closes the window before the
-//     checkpoint block is stored and the fork-below-the-checkpoint window that a
-//     height-only gate would leave open;
+//     SetCheckpointConfirmedAncestor; defaults false). Unless legacy sync's header proof
+//     vouches for the block, this closes the window before the checkpoint block is stored
+//     and the fork-below-the-checkpoint window that a height-only gate would leave open;
 //   - the network defines a hardcoded checkpoint and 0 < b.Height <= that
 //     checkpoint.
 //
@@ -1558,11 +1560,13 @@ func (b *Block) checkBlockRewardAndFees(params *chaincfg.Params, storeSupportsOu
 	//     site, which holds the store; model cannot see the store type directly.
 	//  3. GATED on confirmed ancestry (checkpointConfirmedAncestor). The skip fires only for a
 	//     block PROVEN to be an ancestor of the stored block with the pinned checkpoint hash,
-	//     by following parent links back from it — so the checkpoint transitively commits its
+	//     by following parent links back from it, or proven by legacy sync's header cache before
+	//     the block is stored (ValidateBlockOptions.HeaderProven) — so the checkpoint transitively commits its
 	//     coinbase, making the arithmetic redundant. This closes the two windows a height-only
 	//     skip leaves open: (a) a below-checkpoint block validated before the block with the
 	//     pinned hash is stored, and (b) a fork block below the checkpoint, which the walk from
-	//     the pinned hash never reaches. In both the predicate is false, so the check runs —
+	//     the pinned hash never reaches. In both the predicate is false unless legacy sync supplied
+	//     the header proof, which ties the hash to the pinned checkpoint directly, so the check runs —
 	//     correctly, because non-fast-path blocks carry real fees. A fast-path block that was
 	//     invalidated and is reconsidered still passes, because the walk follows stored parent
 	//     links whatever their validity. The predicate is
@@ -2317,6 +2321,9 @@ func (b *Block) checkParentsExistOnChain(ctx context.Context, logger ulogger.Log
 	)
 	defer deferFn()
 
+	// At utxostore_laneMigration shadow, the lanes shadow of this check, resolved once per block.
+	laneParents := laneParentObserverFrom(ctx)
+
 	// check all the parent transactions in parallel, this allows us to batch read from the txMetaStore
 	parentG := new(errgroup.Group)
 	util.SafeSetLimit(logger, parentG, 1024*32)
@@ -2325,7 +2332,7 @@ func (b *Block) checkParentsExistOnChain(ctx context.Context, logger ulogger.Log
 		parentTxStruct := parentTxStruct
 
 		parentG.Go(func() error {
-			oldParentBlockIDs, err := b.checkParentExistsOnChain(ctx, logger, deps.txMetaStore, parentTxStruct, validationCtx.currentBlockHeaderIDsMap)
+			oldParentBlockIDs, err := b.checkParentExistsOnChainObserved(ctx, logger, deps.txMetaStore, parentTxStruct, validationCtx.currentBlockHeaderIDsMap, laneParents)
 
 			// there are old blocks we need to return to the validator
 			if err == nil && len(oldParentBlockIDs) > 0 {
@@ -2385,6 +2392,13 @@ func (b *Block) getValidationConcurrency(validOrderAndBlessedConcurrency int) in
 }
 
 func (b *Block) checkParentExistsOnChain(gCtx context.Context, logger ulogger.Logger, txMetaStore utxo.Store, parentTxStruct missingParentTx, currentBlockHeaderIDsMap map[uint32]struct{}) ([]uint32, error) {
+	return b.checkParentExistsOnChainObserved(gCtx, logger, txMetaStore, parentTxStruct, currentBlockHeaderIDsMap, laneParentObserverFrom(gCtx))
+}
+
+// checkParentExistsOnChainObserved is checkParentExistsOnChain with the lanes shadow, nil at off,
+// told of the parent record it reads.
+func (b *Block) checkParentExistsOnChainObserved(gCtx context.Context, logger ulogger.Logger, txMetaStore utxo.Store, parentTxStruct missingParentTx,
+	currentBlockHeaderIDsMap map[uint32]struct{}, laneParents LaneParentObserver) ([]uint32, error) {
 	var oldBlockIDs []uint32
 
 	// check whether the parent transaction has already been mined in a block on our chain
@@ -2392,7 +2406,7 @@ func (b *Block) checkParentExistsOnChain(gCtx context.Context, logger ulogger.Lo
 	// two options: 1- parent is currently under validation, 2- parent is from forked chain.
 	// for the first situation we don't start validating the current block until the parent is validated.
 	// parent tx meta was not found, must be old, ignore | it is a coinbase, which obviously is mined in a block
-	parentTxMeta, err := getParentTxMetaBlockIDs(gCtx, txMetaStore, parentTxStruct)
+	parentTxMeta, err := getParentTxMetaBlockIDs(gCtx, txMetaStore, parentTxStruct, laneParents)
 	if err != nil {
 		return oldBlockIDs, err
 	}
@@ -2643,8 +2657,19 @@ func filterCurrentBlockHeaderIDsMap(parentTxMeta *meta.Data, currentBlockHeaderI
 	return foundInPreviousBlocks, minBlockID
 }
 
-func getParentTxMetaBlockIDs(gCtx context.Context, txMetaStore utxo.Store, parentTxStruct missingParentTx) (*meta.Data, error) {
-	parentTxMeta, err := txMetaStore.Get(gCtx, &parentTxStruct.parentTxHash, fields.BlockIDs)
+func getParentTxMetaBlockIDs(gCtx context.Context, txMetaStore utxo.Store, parentTxStruct missingParentTx, observer LaneParentObserver) (*meta.Data, error) {
+	readFields := []fields.FieldName{fields.BlockIDs}
+	if observer != nil {
+		// The lanes shadow of this check takes the parent's lane position, and whether it is a
+		// coinbase, from this same read.
+		readFields = append(readFields, fields.LanePosition, fields.IsCoinbase)
+	}
+
+	parentTxMeta, err := txMetaStore.Get(gCtx, &parentTxStruct.parentTxHash, readFields...)
+	if err == nil && observer != nil {
+		observer.ObserveParent(parentTxStruct.parentTxHash, parentTxMeta.LanePosition, parentTxMeta.BlockIDs, parentTxMeta.IsCoinbase)
+	}
+
 	if err != nil {
 		if errors.Is(err, errors.ErrTxNotFound) {
 			// Parent tx is not in our store yet. During catchup this is a transient ordering

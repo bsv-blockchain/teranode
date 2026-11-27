@@ -18,6 +18,8 @@ import (
 //
 // The body is overwritten with bytes that do not decode: a read that touches it fails.
 func TestMetadataReadsLeaveTheBodyOut(t *testing.T) {
+	parallelOnOwnDatabase(t)
+
 	t.Run("direct", func(t *testing.T) {
 		s, ctx := newTestStore(t)
 		requireMetadataReadsLeaveTheBodyOut(t, s, ctx)
@@ -73,6 +75,8 @@ func requireMetadataReadsLeaveTheBodyOut(t *testing.T, s *Store, ctx context.Con
 // The metadata read's body is overwritten with bytes that do not decode, so a batch that reads it
 // fails that read. The body read names a different transaction with an intact body.
 func TestBatchedMetadataReadLeavesTheBodyOutBesideABodyRead(t *testing.T) {
+	parallelOnOwnDatabase(t)
+
 	s, ctx := newTestStoreWith(t, func(ts *settings.Settings) {
 		// Two items fill a batch, and the window is long enough that neither flushes alone.
 		ts.UtxoStore.GetBatcherSize = 2

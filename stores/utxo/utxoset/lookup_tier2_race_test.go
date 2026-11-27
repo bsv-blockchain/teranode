@@ -16,6 +16,8 @@ import (
 // The race is between statements, so the test runs the second tier alone on a fresh result: the
 // state the spends left behind when they ran before the create.
 func TestTier2BuildsAnUnminedRecordWithItsMarkerAndBody(t *testing.T) {
+	parallelOnOwnDatabase(t)
+
 	s, ctx := newTestStore(t)
 
 	parent := mkTx(t, 2, 5_000)

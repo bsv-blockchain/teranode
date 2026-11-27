@@ -58,7 +58,7 @@ func BenchmarkBatchPreviousOutputsDecorateDrainMode(b *testing.B) {
 		// hits a different parent record. Setup only, not timed.
 		parents := make([]*chainhash.Hash, maxTxs*2)
 		for i := range parents {
-			parent, err := bt.NewTxFromString(coinbaseTx.String())
+			parent, err := bt.NewTxFromString(fixtureCoinbaseTxHex)
 			require.NoError(b, err)
 			parent.Outputs[0].Satoshis += uint64(i) // unique txid
 

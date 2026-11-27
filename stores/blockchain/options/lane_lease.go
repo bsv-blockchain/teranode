@@ -26,8 +26,9 @@ type LaneLeaseRenew struct {
 	Rate uint64
 	// WantGrant asks for the next grant.
 	WantGrant bool
-	// Settles finishes the oldest grant the holder has left and not yet reported; recorded only
-	// with WantGrant, on the new grant's hand-out row.
+	// Settles finishes the most recent grant the holder has left and not yet reported (an older one
+	// may follow on a later request or the release); recorded only with WantGrant, on the new
+	// grant's hand-out row.
 	Settles lane.Settles
 	// Height is the best block height at the time, recorded with a grant.
 	Height uint32
@@ -48,4 +49,32 @@ type LaneLeaseRelease struct {
 	// Settles finishes the oldest grant left and not yet reported, as on a renewal; a newer one
 	// left after it is settled by LastTaken.
 	Settles lane.Settles
+}
+
+// WithLaneMapRows has StoreBlock insert the block's lane map rows in the block's own database
+// transaction, so the rows commit with the block and only with it. The rows are measured, never
+// acted on: a row the store cannot insert is rolled back alone, counted, and the block is stored.
+func WithLaneMapRows(rows []lane.MapRow) StoreBlockOption {
+	return func(opts *StoreBlockOptions) {
+		opts.LaneMapRows = rows
+	}
+}
+
+// WithOwnBlockLaneMapRows is WithLaneMapRows for a block this node mined, so the lane metrics
+// count its rows under block="own" rather than as a peer's.
+func WithOwnBlockLaneMapRows(rows []lane.MapRow) StoreBlockOption {
+	return func(opts *StoreBlockOptions) {
+		opts.LaneMapRows = rows
+		opts.LaneMapRowsOwnBlock = true
+	}
+}
+
+// LaneMetricsBlock is the block label the lane metrics give the block these options store:
+// lane.BlockOwn for a block this node mined, lane.BlockPeer otherwise.
+func (o StoreBlockOptions) LaneMetricsBlock() string {
+	if o.LaneMapRowsOwnBlock {
+		return lane.BlockOwn
+	}
+
+	return lane.BlockPeer
 }

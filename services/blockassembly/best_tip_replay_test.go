@@ -952,16 +952,16 @@ func movesTouch(hash string, moves ...[]recordedMove) (back, forward bool) {
 }
 
 // Regression proof: a historical tip that takes reset must still be traversed. B is longer
-// than the UTXO retention, so moving to it is a reset, while the best tip stays less than
-// coinbase maturity above A1, so moving A1 back cannot touch a confirmed coinbase spend.
+// than the UTXO retention, so moving to it is a reset. Going from B back to A then moves back
+// past the retention, so block assembly halts there for an operator instead of resetting.
 func TestReplayBestTipChanges_ResetVisitsHistoricalWinner(t *testing.T) {
 	initPrometheusMetrics()
-	items, _, a, b, moves, resetMoves := historicalWinnerSetup(t, 50, 60, 61)
+	items, _, _, b, moves, resetMoves := historicalWinnerSetup(t, 50, 60, 61)
 
 	_, err := items.blockAssembler.replayBestTipChanges(t.Context())
-	require.NoError(t, err)
-	requireBlockAssemblyTip(t, items, a[len(a)-1])
-	requireReplayPosition(t, items, a[len(a)-1])
+	require.Error(t, err)
+	require.True(t, items.blockAssembler.DeepReorgHalted(), "moving 60 blocks of B back at retention 50 must halt")
+	requireBlockAssemblyTip(t, items, b[len(b)-1])
 	require.NotEmpty(t, *resetMoves)
 	_, forward := movesTouch(b[len(b)-1].Hash().String(), *moves, *resetMoves)
 	require.True(t, forward, "B became best within the height floor, but replay checkpointed it without passing B to the subtree processor")

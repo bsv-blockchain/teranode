@@ -342,6 +342,7 @@ func setupWithSubtreeValidationStore(t *testing.T, wrap func(utxostore.Store) ut
 	if err != nil {
 		panic(err)
 	}
+	t.Cleanup(func() { _ = utxoStore.Close(context.Background()) })
 
 	txStore := blobmemory.New()
 	subtreeStore := blobmemory.New()
@@ -365,7 +366,9 @@ func setupWithSubtreeValidationStore(t *testing.T, wrap func(utxostore.Store) ut
 		subtreeValidationStore = wrap(utxoStore)
 	}
 
-	subtreeValidationServer, err := subtreevalidation.New(context.Background(), ulogger.TestLogger{}, tSettings, subtreeStore, txStore, subtreeValidationStore, validatorClient, blockchainClient, nilConsumer, nilConsumer, nil, nil)
+	// t.Context() ends the listener and cache goroutines New starts when the test
+	// ends; Stop does not, and they would keep the server and its stores reachable.
+	subtreeValidationServer, err := subtreevalidation.New(t.Context(), ulogger.TestLogger{}, tSettings, subtreeStore, txStore, subtreeValidationStore, validatorClient, blockchainClient, nilConsumer, nilConsumer, nil, nil)
 	if err != nil {
 		panic(err)
 	}
@@ -2385,7 +2388,8 @@ func Test_checkOldBlockIDs(t *testing.T) {
 		}
 
 		blockchainMock.On("CheckBlockIsAncestorOfBlock", mock.Anything, mock.Anything, mock.Anything).Return(true, nil)
-		blockchainMock.On("GetBlockHeaderIDs", mock.Anything, mock.Anything, mock.Anything).Return(blockIDs, nil).Once()
+		// an unset oldBlockIDsPrefetchWindow loads the production 10,000 IDs
+		blockchainMock.On("GetBlockHeaderIDs", mock.Anything, mock.Anything, uint64(10_000)).Return(blockIDs, nil).Once()
 
 		err := blockValidation.checkOldBlockIDs(t.Context(), oldBlockIDsMap, testBlock())
 		require.NoError(t, err)
@@ -3336,6 +3340,7 @@ func TestBlockValidation_RevalidateIsCalledOnHeaderError(t *testing.T) {
 
 	utxoStore, err := sql.New(ctx, logger, tSettings, utxoStoreURL)
 	require.NoError(t, err)
+	t.Cleanup(func() { _ = utxoStore.Close(context.Background()) })
 
 	subtreeValidationClient := &subtreevalidation.MockSubtreeValidation{}
 

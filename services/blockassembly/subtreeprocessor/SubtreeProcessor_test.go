@@ -7,9 +7,11 @@ import (
 	"fmt"
 	"net/url"
 	"os"
+	"runtime"
 	"sync"
 	"testing"
 	"time"
+	"weak"
 
 	"github.com/bsv-blockchain/go-bt/v2"
 	"github.com/bsv-blockchain/go-bt/v2/bscript"
@@ -1456,7 +1458,7 @@ func TestParallelBuildRemainderSubtrees_MultiChunk(t *testing.T) {
 	stp.currentSubtree.Store(cs)
 	stp.chainedSubtrees = make([]*subtreepkg.Subtree, 0)
 
-	require.NoError(t, stp.parallelBuildRemainderSubtrees(ctx, ordered, true))
+	require.NoError(t, stp.parallelBuildRemainderSubtrees(ctx, ordered, nil, true))
 
 	// Reassemble leaf order from chainedSubtrees followed by currentSubtree,
 	// stripping coinbase placeholders.
@@ -2838,63 +2840,92 @@ func TestSubtreeProcessor_CreateTransactionMap(t *testing.T) {
 	})
 }
 
+// addNodeBenchmarkSizes are the subtree sizes BenchmarkAddNode and BenchmarkAddNodeWithMap fill
+// ten subtrees of. Each run of either is one fill, whatever b.N is, so run them at -benchtime=1x.
+// One 1Mi fill takes 12 to 18 s on a CI runner, so -short (CI) runs only the 64Ki size.
+var addNodeBenchmarkSizes = []struct {
+	name      string
+	leafCount int
+	long      bool
+}{
+	{name: "64Ki_per_subtree", leafCount: 1 << 16},
+	{name: "1Mi_per_subtree", leafCount: 1 << 20, long: true},
+}
+
 // BenchmarkAddNode tests node addition performance.
 func BenchmarkAddNode(b *testing.B) {
-	g, stp, txHashes := initTestAddNodeBenchmark(b)
+	for _, size := range addNodeBenchmarkSizes {
+		b.Run(size.name, func(b *testing.B) {
+			if size.long && testing.Short() {
+				b.Skip("one fill takes 12 to 18 s on a CI runner; skipped in -short")
+			}
 
-	startTime := time.Now()
+			g, stp, txHashes := initTestAddNodeBenchmark(b, size.leafCount)
 
-	b.ResetTimer()
+			startTime := time.Now()
 
-	for i, txHash := range txHashes {
-		stp.AddBatch([]subtreepkg.Node{{Hash: txHash, Fee: uint64(i)}}, []*subtreepkg.TxInpoints{{ParentTxHashes: []chainhash.Hash{txHash}}}) // nolint:gosec
+			b.ResetTimer()
+
+			for i, txHash := range txHashes {
+				stp.AddBatch([]subtreepkg.Node{{Hash: txHash, Fee: uint64(i)}}, []*subtreepkg.TxInpoints{{ParentTxHashes: []chainhash.Hash{txHash}}}) // nolint:gosec
+			}
+
+			err := g.Wait()
+			require.NoError(b, err)
+
+			b.Logf("Time taken: %s\n", time.Since(startTime))
+		})
 	}
-
-	err := g.Wait()
-	require.NoError(b, err)
-
-	b.Logf("Time taken: %s\n", time.Since(startTime))
 }
 
 func BenchmarkAddNodeWithMap(b *testing.B) {
-	g, stp, txHashes := initTestAddNodeBenchmark(b)
+	for _, size := range addNodeBenchmarkSizes {
+		b.Run(size.name, func(b *testing.B) {
+			if size.long && testing.Short() {
+				b.Skip("one fill takes 12 to 18 s on a CI runner; skipped in -short")
+			}
 
-	_ = stp.Remove(b.Context(), txHashes[1000])
-	_ = stp.Remove(b.Context(), txHashes[2000])
-	_ = stp.Remove(b.Context(), txHashes[3000]) //nolint:gosec
-	_ = stp.Remove(b.Context(), txHashes[4000])
+			g, stp, txHashes := initTestAddNodeBenchmark(b, size.leafCount)
 
-	for i := 0; i < 4; i++ {
-		txHash, err := generateTxHash()
-		require.NoError(b, err)
+			_ = stp.Remove(b.Context(), txHashes[1000])
+			_ = stp.Remove(b.Context(), txHashes[2000])
+			_ = stp.Remove(b.Context(), txHashes[3000]) //nolint:gosec
+			_ = stp.Remove(b.Context(), txHashes[4000])
 
-		txHashes = append(txHashes, txHash)
+			for i := 0; i < 4; i++ {
+				txHash, err := generateTxHash()
+				require.NoError(b, err)
+
+				txHashes = append(txHashes, txHash)
+			}
+
+			startTime := time.Now()
+
+			b.ResetTimer()
+
+			for i, txHash := range txHashes {
+				stp.AddBatch([]subtreepkg.Node{{Hash: txHash, Fee: uint64(i)}}, []*subtreepkg.TxInpoints{{ParentTxHashes: []chainhash.Hash{txHash}}}) //nolint:gosec
+			}
+
+			err := g.Wait()
+			require.NoError(b, err)
+
+			b.Logf("Time taken: %s\n", time.Since(startTime))
+		})
 	}
-
-	startTime := time.Now()
-
-	b.ResetTimer()
-
-	for i, txHash := range txHashes {
-		stp.AddBatch([]subtreepkg.Node{{Hash: txHash, Fee: uint64(i)}}, []*subtreepkg.TxInpoints{{ParentTxHashes: []chainhash.Hash{txHash}}}) //nolint:gosec
-	}
-
-	err := g.Wait()
-	require.NoError(b, err)
-
-	b.Logf("Time taken: %s\n", time.Since(startTime))
 }
 
 // initTestAddNodeBenchmark initializes benchmark environment for AddNode testing.
 //
 // Parameters:
 //   - t: Benchmark testing instance
+//   - leafCount: Subtree size; the hashes fill ten subtrees of it
 //
 // Returns:
 //   - *errgroup.Group: Error group for concurrent operations
 //   - *SubtreeProcessor: Processor instance for testing
 //   - []chainhash.Hash: Test transaction hashes
-func initTestAddNodeBenchmark(b *testing.B) (*errgroup.Group, *SubtreeProcessor, []chainhash.Hash) {
+func initTestAddNodeBenchmark(b *testing.B, leafCount int) (*errgroup.Group, *SubtreeProcessor, []chainhash.Hash) {
 	newSubtreeChan := make(chan NewSubtreeRequest)
 	g := errgroup.Group{}
 	nrSubtreesExpected := 10
@@ -2917,13 +2948,13 @@ func initTestAddNodeBenchmark(b *testing.B) (*errgroup.Group, *SubtreeProcessor,
 	})
 
 	settings := test.CreateBaseTestSettings(b)
-	settings.BlockAssembly.InitialMerkleItemsPerSubtree = 1048576
+	settings.BlockAssembly.InitialMerkleItemsPerSubtree = leafCount
 	settings.BlockAssembly.DoubleSpendWindow = 0
 
 	stp, _ := NewSubtreeProcessor(b.Context(), ulogger.TestLogger{}, settings, nil, nil, nil, newSubtreeChan)
 	stp.Start(b.Context())
 
-	nrTxs := 1_048_576
+	nrTxs := leafCount
 	txHashes := make([]chainhash.Hash, 10*nrTxs)
 
 	for i := 0; i < (10*nrTxs)-1; i++ {
@@ -4638,7 +4669,7 @@ func TestNewSubtreeChanContextCancellation(t *testing.T) {
 		cancel()
 
 		waitForReturn(t, "parallelBuildRemainderSubtrees", func() error {
-			return stp.parallelBuildRemainderSubtrees(cancelledCtx, kept, true)
+			return stp.parallelBuildRemainderSubtrees(cancelledCtx, kept, nil, true)
 		})
 	})
 }
@@ -5037,4 +5068,62 @@ func TestTxInpointsFromUtxoStoreReadsInBoundedBatches(t *testing.T) {
 	}
 
 	require.Empty(t, txInpoints[4].ParentTxHashes, "a tx whose record is gone has no links to read")
+}
+
+// TestProcessedBatchesAreReleasedAfterABurst pins that the main loop does not keep processed batches
+// reachable. Each queued TxBatch links to the next one, so a single stale *TxBatch left in the reused
+// dequeue slice pins every batch queued after it, with all their nodes and inpoints. A burst that fills
+// more slots than later iterations use leaves exactly such stale slots; the nightly soak test saw this as
+// heap growing linearly for as long as the load ran.
+func TestProcessedBatchesAreReleasedAfterABurst(t *testing.T) {
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+
+	stp := newTestSubtreeProcessorForDequeueStaleness(t, ctx)
+	stp.settings.BlockAssembly.DoubleSpendWindow = 0
+
+	nextHash := byte(0)
+	newBatch := func() []subtreepkg.Node {
+		nextHash++
+		nodes := []subtreepkg.Node{{Hash: chainhash.Hash{nextHash, 0xbb}, Fee: 1, SizeInBytes: 1}}
+		stp.queue.enqueueBatch(nodes, []*subtreepkg.TxInpoints{{}})
+
+		return nodes
+	}
+	waitDrained := func() {
+		require.Eventually(t, func() bool { return stp.queue.length() == 0 }, 5*time.Second, time.Millisecond)
+	}
+
+	// Queued before Start, so the first iteration dequeues the whole burst into the slice.
+	for range 10 {
+		newBatch()
+	}
+
+	stp.Start(ctx)
+	t.Cleanup(func() { stp.Stop(ctx) })
+	waitDrained()
+
+	// Steady state: one batch per iteration. Only the newest few may stay reachable.
+	const steady = 100
+
+	watched := make([]weak.Pointer[subtreepkg.Node], 0, steady)
+
+	for range steady {
+		nodes := newBatch()
+		watched = append(watched, weak.Make(&nodes[0]))
+		waitDrained()
+	}
+
+	runtime.GC()
+	runtime.GC()
+
+	retained := 0
+
+	for _, w := range watched[:steady/2] {
+		if w.Value() != nil {
+			retained++
+		}
+	}
+
+	require.Zero(t, retained, "%d of the %d oldest processed batches are still reachable", retained, steady/2)
 }

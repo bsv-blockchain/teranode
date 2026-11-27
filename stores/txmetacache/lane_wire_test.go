@@ -99,20 +99,30 @@ func TestLaneMetaContentCountsWhatDoesNotDecode(t *testing.T) {
 	require.Equal(t, before+7, testutil.ToFloat64(prometheusLaneTxMetaMisses.WithLabelValues(LaneMissDecode)))
 }
 
-// The sender counts every entry at shadow, lane or legacy, and the reason for each legacy one.
+// The sender counts every entry at shadow, lane, own or legacy, and the reason for each one that
+// goes without the parents' positions.
 func TestCountLaneTxMetaSent(t *testing.T) {
 	lanes := prometheusLaneTxMetaMessages.WithLabelValues("sent", "lane")
+	own := prometheusLaneTxMetaMessages.WithLabelValues("sent", "own")
 	legacy := prometheusLaneTxMetaMessages.WithLabelValues("sent", "legacy")
 	parentMissing := prometheusLaneTxMetaMisses.WithLabelValues(LaneMissParent)
+	ownMissing := prometheusLaneTxMetaMisses.WithLabelValues(LaneMissOwn)
 
-	beforeLane, beforeLegacy, beforeMiss := testutil.ToFloat64(lanes), testutil.ToFloat64(legacy), testutil.ToFloat64(parentMissing)
+	beforeLane, beforeOwn, beforeLegacy := testutil.ToFloat64(lanes), testutil.ToFloat64(own), testutil.ToFloat64(legacy)
+	beforeParent, beforeOwnMiss := testutil.ToFloat64(parentMissing), testutil.ToFloat64(ownMissing)
+	noReason := prometheusLaneTxMetaMisses.WithLabelValues("")
+	beforeNoReason := testutil.ToFloat64(noReason)
 
-	CountLaneTxMetaSent("")
-	CountLaneTxMetaSent(LaneMissParent)
+	CountLaneTxMetaSent("", false)
+	CountLaneTxMetaSent(LaneMissParent, true)
+	CountLaneTxMetaSent(LaneMissOwn, false)
 
 	require.Equal(t, beforeLane+1, testutil.ToFloat64(lanes))
+	require.Equal(t, beforeOwn+1, testutil.ToFloat64(own))
 	require.Equal(t, beforeLegacy+1, testutil.ToFloat64(legacy))
-	require.Equal(t, beforeMiss+1, testutil.ToFloat64(parentMissing))
+	require.Equal(t, beforeParent+1, testutil.ToFloat64(parentMissing))
+	require.Equal(t, beforeOwnMiss+1, testutil.ToFloat64(ownMissing))
+	require.Equal(t, beforeNoReason, testutil.ToFloat64(noReason), "a full lane entry is no miss")
 }
 
 // A consumer counts each entry under its own name, by the format the entry came in.
@@ -121,13 +131,62 @@ func TestLaneTxMetaReceivedCountsByFormat(t *testing.T) {
 	legacy := prometheusLaneTxMetaMessages.WithLabelValues("test-consumer", "legacy")
 	beforeLane, beforeLegacy := testutil.ToFloat64(lanes), testutil.ToFloat64(legacy)
 
+	own := prometheusLaneTxMetaMessages.WithLabelValues("test-consumer", "own")
+	beforeOwn := testutil.ToFloat64(own)
+
 	received := NewLaneTxMetaReceived("test-consumer")
 	received.Count(true)
 	received.Count(true)
 	received.Count(false)
+	received.CountOwn()
 
 	require.Equal(t, beforeLane+2, testutil.ToFloat64(lanes))
 	require.Equal(t, beforeLegacy+1, testutil.ToFloat64(legacy))
+	require.Equal(t, beforeOwn+1, testutil.ToFloat64(own))
+}
+
+// An ADDOwn entry gives the receiver the MetaBytes a plain ADD entry carries, without a copy.
+func TestOwnCacheContentIsTheMetaBytes(t *testing.T) {
+	d := laneTestData(t)
+
+	content, err := d.CacheBytes()
+	require.NoError(t, err)
+
+	misses := testutil.ToFloat64(prometheusLaneTxMetaMisses.WithLabelValues(LaneMissDecode))
+
+	legacy, err := OwnCacheContent(content)
+	require.NoError(t, err)
+	require.Equal(t, misses, testutil.ToFloat64(prometheusLaneTxMetaMisses.WithLabelValues(LaneMissDecode)),
+		"an entry that checks out is not a miss")
+
+	want, err := d.MetaBytes()
+	require.NoError(t, err)
+	require.Equal(t, want, legacy)
+	require.Same(t, &content[0], &legacy[0])
+}
+
+// An ADDOwn entry that does not check out is an error for the receiver to drop, and a counted miss.
+func TestOwnCacheContentCountsWhatDoesNotCheckOut(t *testing.T) {
+	d := laneTestData(t)
+
+	content, err := d.CacheBytes()
+	require.NoError(t, err)
+
+	plain, err := d.MetaBytes()
+	require.NoError(t, err)
+
+	before := testutil.ToFloat64(prometheusLaneTxMetaMisses.WithLabelValues(LaneMissDecode))
+
+	for name, bad := range map[string][]byte{
+		"plain MetaBytes": plain,
+		"truncated":       content[:len(content)-1],
+		"zero position":   append(append([]byte(nil), plain...), 0, 0, 0, 0, 0, 0, 0, 0),
+	} {
+		_, err := OwnCacheContent(bad)
+		require.Error(t, err, name)
+	}
+
+	require.Equal(t, before+3, testutil.ToFloat64(prometheusLaneTxMetaMisses.WithLabelValues(LaneMissDecode)))
 }
 
 // The view allocates nothing, so a receiver pays no more for a lane entry than for a plain one.
@@ -142,6 +201,46 @@ func TestLaneMetaContentDoesNotAllocate(t *testing.T) {
 			t.Fatal(err)
 		}
 	}))
+}
+
+// With room for the whole message in dst, building an entry's cache form allocates nothing.
+func TestAppendLaneCacheContentDoesNotAllocate(t *testing.T) {
+	d := laneTestData(t)
+
+	content, err := d.LaneMetaBytesInto(nil, []uint64{lane.Pack(3, 1), lane.Pack(4, 2)})
+	require.NoError(t, err)
+
+	dst := make([]byte, 0, len(content))
+
+	require.Zero(t, testing.AllocsPerRun(1000, func() {
+		if _, err := AppendLaneCacheContent(dst[:0], content); err != nil {
+			t.Fatal(err)
+		}
+	}))
+}
+
+// At shadow a receiver keeps the lane entry's own position after its MetaBytes: the cache form.
+func TestAppendLaneCacheContentIsTheCacheForm(t *testing.T) {
+	d := laneTestData(t)
+
+	content, err := d.LaneMetaBytesInto(nil, []uint64{lane.Pack(3, 1), lane.Pack(4, 2)})
+	require.NoError(t, err)
+
+	want, err := d.CacheBytes()
+	require.NoError(t, err)
+
+	got, err := AppendLaneCacheContent(make([]byte, 0, len(content)), content)
+	require.NoError(t, err)
+	require.Equal(t, want, got)
+	require.LessOrEqual(t, len(got), len(content), "the cache form is never longer than the entry")
+
+	before := testutil.ToFloat64(prometheusLaneTxMetaMisses.WithLabelValues(LaneMissDecode))
+
+	dst := []byte{1}
+	got, err = AppendLaneCacheContent(dst, content[:len(content)-1])
+	require.Error(t, err)
+	require.Equal(t, []byte{1}, got)
+	require.Equal(t, before+1, testutil.ToFloat64(prometheusLaneTxMetaMisses.WithLabelValues(LaneMissDecode)))
 }
 
 // laneMetaWith returns a copy of content changed by change.

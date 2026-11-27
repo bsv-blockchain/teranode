@@ -20,6 +20,8 @@ import (
 // on both transports — Lua TX_NOT_FOUND on the UDF path, KEY_NOT_FOUND under
 // the native path's UPDATE_ONLY policy), and an unfrozen UTXO unfreeze.
 func TestFreezeUnfreezeResultHandling(t *testing.T) {
+	t.Parallel()
+
 	logger := ulogger.NewErrorTestLogger(t)
 	tSettings := test.CreateBaseTestSettings(t)
 
@@ -82,6 +84,31 @@ func TestFreezeUnfreezeResultHandling(t *testing.T) {
 		// on the UDF path, KEY_NOT_FOUND under native UPDATE_ONLY — both must
 		// come back as success.
 		require.NoError(t, store.FreezeUTXOs(ctx, []*utxo.Spend{missingSpend}, tSettings))
+	})
+
+	t.Run("freeze_mismatched_commitment_errors", func(t *testing.T) {
+		// An existing, unspent output frozen with the wrong commitment must fail.
+		// The record still exists, so this is not the missing-record no-op above.
+		unspentTx := chainhash.HashH([]byte("freeze-mismatch-tx"))
+		storedUtxo := chainhash.HashH([]byte("freeze-mismatch-stored-utxo"))
+		wrongUtxo := chainhash.HashH([]byte("freeze-mismatch-wrong-utxo"))
+
+		unspentKeySource := uaerospike.CalculateKeySource(&unspentTx, 0, store.GetUtxoBatchSize())
+		unspentKey, keyErr := aerospike.NewKey(store.GetNamespace(), store.GetName(), unspentKeySource)
+		require.NoError(t, keyErr)
+
+		require.NoError(t, client.Put(nil, unspentKey, aerospike.BinMap{
+			fields.Utxos.String():      []interface{}{storedUtxo[:]},
+			fields.TotalUtxos.String(): 1,
+			fields.SpentUtxos.String(): 0,
+		}))
+
+		err := store.FreezeUTXOs(ctx, []*utxo.Spend{{TxID: &unspentTx, Vout: 0, UTXOHash: &wrongUtxo}}, tSettings)
+		require.Error(t, err)
+		require.Contains(t, err.Error(), "failed to freeze aerospike utxo")
+
+		// The output was not frozen: the correct commitment still freezes it.
+		require.NoError(t, store.FreezeUTXOs(ctx, []*utxo.Spend{{TxID: &unspentTx, Vout: 0, UTXOHash: &storedUtxo}}, tSettings))
 	})
 
 	t.Run("reassign_missing_record_errors", func(t *testing.T) {

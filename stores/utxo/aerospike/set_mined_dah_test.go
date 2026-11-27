@@ -30,6 +30,8 @@ import (
 //
 // Covers both the Lua UDF path and the filter-expression path.
 func TestSetMinedStampsDAHAtMinedBlockHeight(t *testing.T) {
+	t.Parallel()
+
 	if testing.Short() {
 		t.Skip("Skipping Aerospike integration test in short mode")
 	}
@@ -50,12 +52,11 @@ func TestSetMinedStampsDAHAtMinedBlockHeight(t *testing.T) {
 			// code paths and must agree.
 			tSettings.UtxoStore.UtxoBatchSize = 4
 
-			retention := tSettings.GetUtxoStoreBlockHeightRetention()
+			retention := tSettings.GetUtxoStoreSpentDeleteRetention()
 			require.Greater(t, retention, uint32(0), "test requires a non-zero block height retention")
 
 			client, store, _, cleanup := initAerospike(t, tSettings, logger)
 			defer cleanup()
-			cleanDB(t, client)
 
 			// Cached chain tip lags far behind the block being validated — the
 			// catchup / sync condition that triggered the bug.
@@ -67,7 +68,7 @@ func TestSetMinedStampsDAHAtMinedBlockHeight(t *testing.T) {
 			// pagination record 1 holds 2). A non-zero previous txid keeps this from
 			// being treated as a coinbase (whose outputs would be subject to maturity
 			// and could not be spent here).
-			parent := bt.NewTx()
+			parent := uniqueTx(bt.NewTx())
 			require.NoError(t, parent.From(
 				"1111111111111111111111111111111111111111111111111111111111111111",
 				0,

@@ -53,6 +53,11 @@ var (
 	// descend from one that was.
 	prometheusSubtreeProcessorTxEraDropped prometheus.Counter
 
+	// prometheusSubtreeProcessorLateMinedDropped counts handed-off transactions dropped, on arrival
+	// or when placed, because a block applied within blockassembly_minedTxSetRetention, plus any
+	// double-spend window, already mined them.
+	prometheusSubtreeProcessorLateMinedDropped prometheus.Counter
+
 	// prometheusSubtreeProcessorDiskTxMapErrors counts disk tx map storage errors
 	// that surface after an operation's commit point, where the underlying state
 	// change has already been applied and cannot be rolled back. These are logged
@@ -292,6 +297,15 @@ func _initPrometheusMetrics() {
 			Subsystem: "subtreeprocessor",
 			Name:      "oversize_batch_admitted_total",
 			Help:      "Number of batches larger than the whole item cap admitted alone onto an empty ingest queue",
+		},
+	)
+
+	prometheusSubtreeProcessorLateMinedDropped = promauto.NewCounter(
+		prometheus.CounterOpts{
+			Namespace: "teranode",
+			Subsystem: "subtreeprocessor",
+			Name:      "late_mined_dropped_total",
+			Help:      "Number of handed-off transactions dropped, on arrival or when placed, because a block applied within blockassembly_minedTxSetRetention, plus any double-spend window, already mined them",
 		},
 	)
 

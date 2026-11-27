@@ -62,6 +62,8 @@ const (
 	BlockchainAPI_OpenLaneLease_FullMethodName                       = "/blockchain_api.BlockchainAPI/OpenLaneLease"
 	BlockchainAPI_RenewLaneLease_FullMethodName                      = "/blockchain_api.BlockchainAPI/RenewLaneLease"
 	BlockchainAPI_ReleaseLaneLease_FullMethodName                    = "/blockchain_api.BlockchainAPI/ReleaseLaneLease"
+	BlockchainAPI_GetLaneMapRows_FullMethodName                      = "/blockchain_api.BlockchainAPI/GetLaneMapRows"
+	BlockchainAPI_GetLaneCapGrants_FullMethodName                    = "/blockchain_api.BlockchainAPI/GetLaneCapGrants"
 	BlockchainAPI_GetBestBlockHeader_FullMethodName                  = "/blockchain_api.BlockchainAPI/GetBestBlockHeader"
 	BlockchainAPI_CheckBlockIsInCurrentChain_FullMethodName          = "/blockchain_api.BlockchainAPI/CheckBlockIsInCurrentChain"
 	BlockchainAPI_CheckBlockIsAncestorOfBlock_FullMethodName         = "/blockchain_api.BlockchainAPI/CheckBlockIsAncestorOfBlock"
@@ -184,6 +186,10 @@ type BlockchainAPIClient interface {
 	RenewLaneLease(ctx context.Context, in *RenewLaneLeaseRequest, opts ...grpc.CallOption) (*RenewLaneLeaseResponse, error)
 	// ReleaseLaneLease closes a lane lease cleanly and records the highest position its holder gave out that may carry a record (positions at the top that came back unwritten are left out).
 	ReleaseLaneLease(ctx context.Context, in *ReleaseLaneLeaseRequest, opts ...grpc.CallOption) (*ReleaseLaneLeaseResponse, error)
+	// GetLaneMapRows returns one block's lane map rows, by lane and first position (utxostore_laneMigration shadow readers).
+	GetLaneMapRows(ctx context.Context, in *GetLaneMapRowsRequest, opts ...grpc.CallOption) (*GetLaneMapRowsResponse, error)
+	// GetLaneCapGrants returns, for each lane with one, the first grant handed out at or above a height (block assembly's restart window, utxostore_laneMigration shadow).
+	GetLaneCapGrants(ctx context.Context, in *GetLaneCapGrantsRequest, opts ...grpc.CallOption) (*GetLaneCapGrantsResponse, error)
 	// GetBestBlockHeader retrieves the header of the current best block.
 	GetBestBlockHeader(ctx context.Context, in *emptypb.Empty, opts ...grpc.CallOption) (*GetBlockHeaderResponse, error)
 	// CheckBlockIsInCurrentChain verifies if specified blocks are in the main chain.
@@ -592,6 +598,26 @@ func (c *blockchainAPIClient) ReleaseLaneLease(ctx context.Context, in *ReleaseL
 	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
 	out := new(ReleaseLaneLeaseResponse)
 	err := c.cc.Invoke(ctx, BlockchainAPI_ReleaseLaneLease_FullMethodName, in, out, cOpts...)
+	if err != nil {
+		return nil, err
+	}
+	return out, nil
+}
+
+func (c *blockchainAPIClient) GetLaneMapRows(ctx context.Context, in *GetLaneMapRowsRequest, opts ...grpc.CallOption) (*GetLaneMapRowsResponse, error) {
+	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
+	out := new(GetLaneMapRowsResponse)
+	err := c.cc.Invoke(ctx, BlockchainAPI_GetLaneMapRows_FullMethodName, in, out, cOpts...)
+	if err != nil {
+		return nil, err
+	}
+	return out, nil
+}
+
+func (c *blockchainAPIClient) GetLaneCapGrants(ctx context.Context, in *GetLaneCapGrantsRequest, opts ...grpc.CallOption) (*GetLaneCapGrantsResponse, error) {
+	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
+	out := new(GetLaneCapGrantsResponse)
+	err := c.cc.Invoke(ctx, BlockchainAPI_GetLaneCapGrants_FullMethodName, in, out, cOpts...)
 	if err != nil {
 		return nil, err
 	}
@@ -1087,6 +1113,10 @@ type BlockchainAPIServer interface {
 	RenewLaneLease(context.Context, *RenewLaneLeaseRequest) (*RenewLaneLeaseResponse, error)
 	// ReleaseLaneLease closes a lane lease cleanly and records the highest position its holder gave out that may carry a record (positions at the top that came back unwritten are left out).
 	ReleaseLaneLease(context.Context, *ReleaseLaneLeaseRequest) (*ReleaseLaneLeaseResponse, error)
+	// GetLaneMapRows returns one block's lane map rows, by lane and first position (utxostore_laneMigration shadow readers).
+	GetLaneMapRows(context.Context, *GetLaneMapRowsRequest) (*GetLaneMapRowsResponse, error)
+	// GetLaneCapGrants returns, for each lane with one, the first grant handed out at or above a height (block assembly's restart window, utxostore_laneMigration shadow).
+	GetLaneCapGrants(context.Context, *GetLaneCapGrantsRequest) (*GetLaneCapGrantsResponse, error)
 	// GetBestBlockHeader retrieves the header of the current best block.
 	GetBestBlockHeader(context.Context, *emptypb.Empty) (*GetBlockHeaderResponse, error)
 	// CheckBlockIsInCurrentChain verifies if specified blocks are in the main chain.
@@ -1276,6 +1306,12 @@ func (UnimplementedBlockchainAPIServer) RenewLaneLease(context.Context, *RenewLa
 }
 func (UnimplementedBlockchainAPIServer) ReleaseLaneLease(context.Context, *ReleaseLaneLeaseRequest) (*ReleaseLaneLeaseResponse, error) {
 	return nil, status.Error(codes.Unimplemented, "method ReleaseLaneLease not implemented")
+}
+func (UnimplementedBlockchainAPIServer) GetLaneMapRows(context.Context, *GetLaneMapRowsRequest) (*GetLaneMapRowsResponse, error) {
+	return nil, status.Error(codes.Unimplemented, "method GetLaneMapRows not implemented")
+}
+func (UnimplementedBlockchainAPIServer) GetLaneCapGrants(context.Context, *GetLaneCapGrantsRequest) (*GetLaneCapGrantsResponse, error) {
+	return nil, status.Error(codes.Unimplemented, "method GetLaneCapGrants not implemented")
 }
 func (UnimplementedBlockchainAPIServer) GetBestBlockHeader(context.Context, *emptypb.Empty) (*GetBlockHeaderResponse, error) {
 	return nil, status.Error(codes.Unimplemented, "method GetBestBlockHeader not implemented")
@@ -1990,6 +2026,42 @@ func _BlockchainAPI_ReleaseLaneLease_Handler(srv interface{}, ctx context.Contex
 	}
 	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
 		return srv.(BlockchainAPIServer).ReleaseLaneLease(ctx, req.(*ReleaseLaneLeaseRequest))
+	}
+	return interceptor(ctx, in, info, handler)
+}
+
+func _BlockchainAPI_GetLaneMapRows_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
+	in := new(GetLaneMapRowsRequest)
+	if err := dec(in); err != nil {
+		return nil, err
+	}
+	if interceptor == nil {
+		return srv.(BlockchainAPIServer).GetLaneMapRows(ctx, in)
+	}
+	info := &grpc.UnaryServerInfo{
+		Server:     srv,
+		FullMethod: BlockchainAPI_GetLaneMapRows_FullMethodName,
+	}
+	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
+		return srv.(BlockchainAPIServer).GetLaneMapRows(ctx, req.(*GetLaneMapRowsRequest))
+	}
+	return interceptor(ctx, in, info, handler)
+}
+
+func _BlockchainAPI_GetLaneCapGrants_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
+	in := new(GetLaneCapGrantsRequest)
+	if err := dec(in); err != nil {
+		return nil, err
+	}
+	if interceptor == nil {
+		return srv.(BlockchainAPIServer).GetLaneCapGrants(ctx, in)
+	}
+	info := &grpc.UnaryServerInfo{
+		Server:     srv,
+		FullMethod: BlockchainAPI_GetLaneCapGrants_FullMethodName,
+	}
+	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
+		return srv.(BlockchainAPIServer).GetLaneCapGrants(ctx, req.(*GetLaneCapGrantsRequest))
 	}
 	return interceptor(ctx, in, info, handler)
 }
@@ -2841,6 +2913,14 @@ var BlockchainAPI_ServiceDesc = grpc.ServiceDesc{
 		{
 			MethodName: "ReleaseLaneLease",
 			Handler:    _BlockchainAPI_ReleaseLaneLease_Handler,
+		},
+		{
+			MethodName: "GetLaneMapRows",
+			Handler:    _BlockchainAPI_GetLaneMapRows_Handler,
+		},
+		{
+			MethodName: "GetLaneCapGrants",
+			Handler:    _BlockchainAPI_GetLaneCapGrants_Handler,
 		},
 		{
 			MethodName: "GetBestBlockHeader",

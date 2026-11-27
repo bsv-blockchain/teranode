@@ -28,6 +28,8 @@ import (
 // the state this test was written to forbid is now unreachable by construction, and what is
 // worth pinning is that the read path says the same thing -- in a block, not waiting.
 func TestCreateWithABlockIsNotAlsoWaitingToBeMined(t *testing.T) {
+	parallelOnOwnDatabase(t)
+
 	s, ctx := newTestStore(t)
 
 	tx := mkTx(t, 1, 5_000)
@@ -53,6 +55,8 @@ func TestCreateWithABlockIsNotAlsoWaitingToBeMined(t *testing.T) {
 // TestCreateWithoutABlockIsWaitingToBeMined is the other half, and the reason the marker
 // exists. A transaction arriving from the mempool is in no block, so it waits.
 func TestCreateWithoutABlockIsWaitingToBeMined(t *testing.T) {
+	parallelOnOwnDatabase(t)
+
 	s, ctx := newTestStore(t)
 
 	tx := mkTx(t, 1, 6_000)
@@ -71,6 +75,8 @@ func TestCreateWithoutABlockIsWaitingToBeMined(t *testing.T) {
 // TestCreateOfAnUnMinedBlockStillWaits. An explicit un-mine is the one kind of block
 // information that does NOT mean the transaction is in a block, so the marker stays.
 func TestCreateOfAnUnMinedBlockStillWaits(t *testing.T) {
+	parallelOnOwnDatabase(t)
+
 	s, ctx := newTestStore(t)
 
 	tx := mkTx(t, 1, 7_000)
@@ -89,6 +95,8 @@ func TestCreateOfAnUnMinedBlockStillWaits(t *testing.T) {
 // The preservation pass walks this set before the reclaim runs, so a mined transaction left in
 // it does not merely look wrong, it holds up every reclaim behind it.
 func TestTheWaitingSetExcludesMinedTransactions(t *testing.T) {
+	parallelOnOwnDatabase(t)
+
 	s, ctx := newTestStore(t)
 
 	mined := mkTx(t, 1, 5_000)

@@ -58,7 +58,7 @@ func TestSetMinedNotOnLongestChainReevaluatesDAH(t *testing.T) {
 			defer cancel()
 
 			store, parent := setup(ctx, t)
-			retention := store.settings.GetUtxoStoreBlockHeightRetention()
+			retention := store.settings.GetUtxoStoreSpentDeleteRetention()
 			require.Greater(t, retention, uint32(0))
 			require.NoError(t, store.SetBlockHeight(mainHeight))
 

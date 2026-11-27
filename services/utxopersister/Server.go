@@ -299,6 +299,13 @@ func (s *Server) Init(ctx context.Context) (err error) {
 func (s *Server) Start(ctx context.Context, readyCh chan<- struct{}) error {
 	close(readyCh)
 
+	// The consolidation ceiling sits this many blocks behind the best tip and is
+	// fixed in code, so the coin archive always trails the node's own chain view
+	// by at least that much and only catches up after the tip advances again.
+	// Name the coupling at start-up so an operator sizing recovery sees it there
+	// rather than inferring it from a stale archive after downtime.
+	s.logger.Infof("[UTXOPersister Service] coin archive consolidates to best tip minus %d blocks (compile-time ceiling)", confirmations)
+
 	var (
 		err error
 		ch  chan *blockchain.Notification
@@ -639,6 +646,15 @@ func (s *Server) processNextBlock(ctx context.Context) (time.Duration, error) {
 	if lastWrittenUTXOSetHash.String() != s.settings.ChainCfgParams.GenesisHash.String() {
 		// GetStarting point
 		if err := s.verifyLastSet(ctx, lastWrittenUTXOSetHash); err != nil {
+			if errors.Is(err, errors.ErrNotFound) {
+				// The base set lastProcessed points at is gone. That is not idle
+				// work: no later pass can advance until the set comes back. The
+				// store error goes in as text, not as the wrapped error, so the
+				// result no longer matches ErrNotFound and trigger reports it
+				// instead of logging "No new block to process".
+				return 0, errors.NewStorageError("[UTXOPersister] base UTXO set for block %s height %d is missing, cannot advance: %s", lastWrittenUTXOSetHash, metas[0].Height, err.Error())
+			}
+
 			return 0, err
 		}
 	}

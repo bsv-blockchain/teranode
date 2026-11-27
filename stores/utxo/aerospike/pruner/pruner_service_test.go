@@ -38,7 +38,7 @@ func TestCleanupServiceLogicWithoutProcessor(t *testing.T) {
 	logger := ulogger.NewErrorTestLogger(t, func() {})
 	ctx := context.Background()
 
-	container, err := aeroTest.RunContainer(ctx)
+	container, err := aeroTest.RunContainer(ctx, aeroTest.WithImage(test.AerospikeImage))
 	test.SkipIfContainerUnavailable(t, err)
 
 	t.Cleanup(func() {
@@ -229,7 +229,7 @@ func TestServiceStartStop(t *testing.T) {
 	logger := ulogger.NewErrorTestLogger(t, func() {})
 	ctx := context.Background()
 
-	container, err := aeroTest.RunContainer(ctx)
+	container, err := aeroTest.RunContainer(ctx, aeroTest.WithImage(test.AerospikeImage))
 	test.SkipIfContainerUnavailable(t, err)
 
 	host, err := container.Host(ctx)
@@ -276,7 +276,7 @@ func TestDeleteAtHeight(t *testing.T) {
 	logger := ulogger.New("test")
 	ctx := context.Background()
 
-	container, err := aeroTest.RunContainer(ctx)
+	container, err := aeroTest.RunContainer(ctx, aeroTest.WithImage(test.AerospikeImage))
 	test.SkipIfContainerUnavailable(t, err)
 
 	t.Cleanup(func() {
@@ -449,13 +449,11 @@ func TestDeleteAtHeight(t *testing.T) {
 	require.NoError(t, err)
 	assert.NotNil(t, record)
 
-	// verify that the parent record was marked
+	// the pruner deletes only: the surviving parent is not written to
 	record, err = client.Get(nil, keyParent)
 	require.NoError(t, err)
 	assert.NotNil(t, record)
-	assert.Equal(t, map[interface{}]interface{}{
-		txID1.String(): true,
-	}, record.Bins[fields.DeletedChildren.String()])
+	assert.NotContains(t, record.Bins, fields.DeletedChildren.String(), "the pruner must not write a replay marker on the parent")
 
 	// Run prune synchronously for height 4
 	ctx4, cancel4 := context.WithTimeout(context.Background(), 30*time.Second)

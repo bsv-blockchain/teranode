@@ -20,6 +20,8 @@ import (
 // from tx_mined, where the parent's row is present for as long as any of its spends can be
 // undone.
 func TestUnspendRestoresAUTXOWithItsParentsBlockFactsFromMembership(t *testing.T) {
+	parallelOnOwnDatabase(t)
+
 	s, ctx := newTestStore(t)
 
 	parent := mkTx(t, 1, 5_000)
@@ -48,6 +50,8 @@ func TestUnspendRestoresAUTXOWithItsParentsBlockFactsFromMembership(t *testing.T
 // consuming the journal row; once the UTXO is live, the UTXO being unspent is the fact that
 // matters, not who put it there.
 func TestUnspendOfAnAlreadyRestoredUTXOIsANoOp(t *testing.T) {
+	parallelOnOwnDatabase(t)
+
 	s, ctx := newTestStore(t)
 
 	parent := mkTx(t, 1, 5_000)
@@ -103,6 +107,8 @@ func utxoFlagsOf(t *testing.T, s *Store, ctx context.Context, tx *bt.Tx, vout ui
 // The sql reference locks the transaction row unconditionally, which is why it has never had
 // this gap.
 func TestUnspendLocksAUTXOItFoundAlreadyLive(t *testing.T) {
+	parallelOnOwnDatabase(t)
+
 	s, ctx := newTestStore(t)
 
 	// A block-path parent: its UTXO is live and nothing has ever spent it, so there is no
@@ -136,6 +142,8 @@ func TestUnspendLocksAUTXOItFoundAlreadyLive(t *testing.T) {
 // TestUnspendWithoutTheHoldLeavesALiveUTXOAlone is the other half: Unspend(spends) with no hold
 // asked for must not invent one. A reorg restore has no business locking anything.
 func TestUnspendWithoutTheHoldLeavesALiveUTXOAlone(t *testing.T) {
+	parallelOnOwnDatabase(t)
+
 	s, ctx := newTestStore(t)
 
 	parent := mkTx(t, 1, 5_000)
@@ -169,6 +177,8 @@ func TestUnspendWithoutTheHoldLeavesALiveUTXOAlone(t *testing.T) {
 // block_id still carrying whatever it last held -- must restore the UTXO as fully
 // unconfirmed, not as a height with no matching block.
 func TestUnspendGatesTheJournalsBlockFactsOnASingleSharedCondition(t *testing.T) {
+	parallelOnOwnDatabase(t)
+
 	s, ctx := newTestStore(t)
 
 	parent := mkTx(t, 1, 5_000)
@@ -212,6 +222,8 @@ func TestUnspendGatesTheJournalsBlockFactsOnASingleSharedCondition(t *testing.T)
 // lock, and copying it back left a coin no plain spend could take, with nothing left to clear
 // it. In aerospike the lock is the transaction's, so the restored coin is spendable.
 func TestUnspendGivesTheRestoredUTXOItsTransactionsLockAsItIsNow(t *testing.T) {
+	parallelOnOwnDatabase(t)
+
 	s, ctx := newTestStore(t)
 	require.NoError(t, s.SetBlockHeight(100))
 
@@ -243,6 +255,8 @@ func TestUnspendGivesTheRestoredUTXOItsTransactionsLockAsItIsNow(t *testing.T) {
 // TestUnspendKeepsTheLockOfATransactionStillLocked is the other half: a coin restored while
 // its transaction is still locked comes back locked, so a plain spend is still refused.
 func TestUnspendKeepsTheLockOfATransactionStillLocked(t *testing.T) {
+	parallelOnOwnDatabase(t)
+
 	s, ctx := newTestStore(t)
 	require.NoError(t, s.SetBlockHeight(100))
 
@@ -302,6 +316,8 @@ func lockedStampedParentSpent(t *testing.T, s *Store, ctx context.Context) (*bt.
 // has moved out of tx_ident: the lock the restore reads is the one on its containment row, and
 // that row was unlocked after the spend, so the restored coin is spendable.
 func TestUnspendGivesAStampedTransactionsRestoredUTXOItsLockAsItIsNow(t *testing.T) {
+	parallelOnOwnDatabase(t)
+
 	s, ctx := newTestStore(t)
 
 	parent, spends, spendAt := lockedStampedParentSpent(t, s, ctx)
@@ -320,6 +336,8 @@ func TestUnspendGivesAStampedTransactionsRestoredUTXOItsLockAsItIsNow(t *testing
 // is refused. The lock is on tx_mined alone here, so a restore that read only tx_ident would
 // hand back a spendable coin.
 func TestUnspendKeepsTheLockOfAStampedTransactionStillLocked(t *testing.T) {
+	parallelOnOwnDatabase(t)
+
 	s, ctx := newTestStore(t)
 
 	parent, spends, spendAt := lockedStampedParentSpent(t, s, ctx)
@@ -337,6 +355,8 @@ func TestUnspendKeepsTheLockOfAStampedTransactionStillLocked(t *testing.T) {
 // look within. Here the containment row at height 100 is still locked but the tip has moved so
 // the floor is 288, so the restore does not see that lock and the coin comes back spendable.
 func TestUnspendIgnoresALockOnAContainmentRowBelowTheLookupFloor(t *testing.T) {
+	parallelOnOwnDatabase(t)
+
 	s, ctx := newTestStore(t)
 
 	parent, spends, _ := lockedStampedParentSpent(t, s, ctx)
@@ -378,6 +398,8 @@ func setConflictingTo(s *Store, tx *bt.Tx, value bool) lockChange {
 // passes 100, a restore that read only from the lookup floor up would find no row, keep the
 // journal's bit and hand back a coin that is spendable while its transaction is a loser.
 func TestUnspendReadsTheConflictingMarkBelowTheLookupFloor(t *testing.T) {
+	parallelOnOwnDatabase(t)
+
 	s, ctx := newTestStore(t)
 
 	require.NoError(t, s.SetBlockHeight(100))
@@ -419,6 +441,8 @@ func TestUnspendReadsTheConflictingMarkBelowTheLookupFloor(t *testing.T) {
 // mark from before the wait, and the coin would come back conflicting after its transaction was
 // cleared.
 func TestUnspendRacingAConflictingClearBelowTheLookupFloorWaitsForIt(t *testing.T) {
+	parallelOnOwnDatabase(t)
+
 	s, ctx := newTestStore(t)
 
 	parent := mkTx(t, 2, 10_000)
@@ -448,11 +472,100 @@ func TestUnspendRacingAConflictingClearBelowTheLookupFloorWaitsForIt(t *testing.
 		"the restored coin must not keep a conflicting mark its transaction lost while the restore waited")
 }
 
+// conflictingParentSpent is the fixture for the restore-against-SetConflicting race: a parent,
+// conflicting or not, its output 0 spent by a loser, through IgnoreConflicting when the parent
+// is conflicting. With stamped set, the parent is mined and stamped first, so its conflicting bit
+// lives only on its containment row in tx_mined; otherwise it lives on its identity row. It
+// returns the parent and the loser's spends.
+func conflictingParentSpent(t *testing.T, s *Store, ctx context.Context, stamped, conflicting bool) (*bt.Tx, []*utxo.Spend) {
+	t.Helper()
+
+	require.NoError(t, s.SetBlockHeight(100))
+
+	parent := mkTx(t, 2, 10_000)
+	_, err := s.Create(ctx, parent, 100)
+	require.NoError(t, err)
+
+	spendAt := uint32(101)
+
+	if stamped {
+		_, err = s.SetMinedMulti(ctx, []*chainhash.Hash{parent.TxIDChainHash()},
+			utxo.MinedBlockInfo{BlockID: 7, BlockHeight: 100, OnLongestChain: true})
+		require.NoError(t, err)
+
+		spendAt = stampThrough(t, s, ctx, 0, map[uint32]uint32{100: 7}) + 1
+		require.NoError(t, s.SetBlockHeight(spendAt))
+
+		require.False(t, identExists(t, s, ctx, parent), "fixture: the stamp deleted the identity row")
+		require.Equal(t, 1, minedRows(t, s, ctx, parent), "fixture: the containment row is the only record")
+	}
+
+	if conflicting {
+		_, _, err = s.SetConflicting(ctx, []chainhash.Hash{*parent.TxIDChainHash()}, true)
+		require.NoError(t, err)
+	}
+
+	spends, err := spendOnly(ctx, s, spendParentTx(t, parent, nil, 1_000, 0), spendAt,
+		utxo.WithIgnoreConflicting(conflicting))
+	require.NoError(t, err)
+	require.Len(t, spends, 1)
+
+	return parent, spends
+}
+
+// requireRestoredCoinConflicting checks the restored coin carries the conflicting bit the change
+// left on its transaction.
+func requireRestoredCoinConflicting(t *testing.T, s *Store, ctx context.Context, parent *bt.Tx, conflicting bool) {
+	t.Helper()
+
+	require.Nil(t, spenderOf(t, s, ctx, parent, 0))
+	require.Equal(t, conflicting, utxoFlagsOf(t, s, ctx, parent, 0)&FlagConflicting != 0,
+		"the restored coin must carry its transaction's conflicting bit as SetConflicting left it")
+}
+
+// TestSetConflictingRacingAnUnspend: a parent's bit is changed while its coin is being restored, in
+// both orders, on both of the rows the bit can live on. The restored coin must end with the bit its
+// transaction is left with. Restore first, SetConflicting's row update waits on the restore's share
+// lock, and a coin update in the same statement read the snapshot from before that wait and missed
+// the coin.
+func TestSetConflictingRacingAnUnspend(t *testing.T) {
+	for _, tc := range []struct {
+		name         string
+		stamped      bool
+		conflicting  bool
+		value        bool
+		restoreFirst bool
+	}{
+		{name: "set on the identity row, restore first", value: true, restoreFirst: true},
+		{name: "clear on the identity row, restore first", conflicting: true, restoreFirst: true},
+		{name: "set on the containment row, restore first", stamped: true, value: true, restoreFirst: true},
+		{name: "clear on the containment row, restore first", stamped: true, conflicting: true, restoreFirst: true},
+		{name: "set on the identity row, set first", value: true},
+		{name: "set on the containment row, set first", stamped: true, value: true},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			s, ctx := newTestStore(t)
+
+			parent, spends := conflictingParentSpent(t, s, ctx, tc.stamped, tc.conflicting)
+
+			if tc.restoreFirst {
+				restoreWhileChangeRuns(t, s, ctx, setConflictingTo(s, parent, tc.value), spends)
+			} else {
+				changeWhileRestoreRuns(t, s, ctx, setConflictingTo(s, parent, tc.value), spends)
+			}
+
+			requireRestoredCoinConflicting(t, s, ctx, parent, tc.value)
+		})
+	}
+}
+
 // TestUnspendCutByItsDeadlineLeavesTheUndoRecord: nothing in the store bounds the restore's wait
 // for the rows it share-locks, so the caller's deadline does. A restore cut while it waits must
 // return an error and roll back whole, the coin still spent and its undo record still there, so a
 // later Unspend can restore it. The validator's shed unwind depends on that.
 func TestUnspendCutByItsDeadlineLeavesTheUndoRecord(t *testing.T) {
+	parallelOnOwnDatabase(t)
+
 	s, ctx := newTestStore(t)
 
 	parent, spends := mempoolParentSpent(t, s, ctx, false)
@@ -604,6 +717,8 @@ func requireRestoredCoinLock(t *testing.T, s *Store, ctx context.Context, parent
 // TestUnspendRacingAnUnlockOfTheIdentityRowWaitsForIt: a mempool transaction, unlocked while
 // its coin is being restored, unlock first.
 func TestUnspendRacingAnUnlockOfTheIdentityRowWaitsForIt(t *testing.T) {
+	parallelOnOwnDatabase(t)
+
 	s, ctx := newTestStore(t)
 
 	parent, spends := mempoolParentSpent(t, s, ctx, true)
@@ -614,6 +729,8 @@ func TestUnspendRacingAnUnlockOfTheIdentityRowWaitsForIt(t *testing.T) {
 
 // TestUnlockOfTheIdentityRowRacingAnUnspendWaitsForIt: the same race, restore first.
 func TestUnlockOfTheIdentityRowRacingAnUnspendWaitsForIt(t *testing.T) {
+	parallelOnOwnDatabase(t)
+
 	s, ctx := newTestStore(t)
 
 	parent, spends := mempoolParentSpent(t, s, ctx, true)
@@ -625,6 +742,8 @@ func TestUnlockOfTheIdentityRowRacingAnUnspendWaitsForIt(t *testing.T) {
 // TestUnspendRacingALockOfTheIdentityRowWaitsForIt: the other direction, an unlocked mempool
 // transaction locked while its coin is being restored, lock first.
 func TestUnspendRacingALockOfTheIdentityRowWaitsForIt(t *testing.T) {
+	parallelOnOwnDatabase(t)
+
 	s, ctx := newTestStore(t)
 
 	parent, spends := mempoolParentSpent(t, s, ctx, false)
@@ -635,6 +754,8 @@ func TestUnspendRacingALockOfTheIdentityRowWaitsForIt(t *testing.T) {
 
 // TestLockOfTheIdentityRowRacingAnUnspendWaitsForIt: the lock direction, restore first.
 func TestLockOfTheIdentityRowRacingAnUnspendWaitsForIt(t *testing.T) {
+	parallelOnOwnDatabase(t)
+
 	s, ctx := newTestStore(t)
 
 	parent, spends := mempoolParentSpent(t, s, ctx, false)
@@ -647,6 +768,8 @@ func TestLockOfTheIdentityRowRacingAnUnspendWaitsForIt(t *testing.T) {
 // coin is being restored, mine first. The mine writes the lock the way SetLocked does, the rows
 // in one statement and the coins in a later one, so it has the same race.
 func TestUnspendRacingAMineReleaseWaitsForIt(t *testing.T) {
+	parallelOnOwnDatabase(t)
+
 	s, ctx := newTestStore(t)
 
 	parent, spends := mempoolParentSpent(t, s, ctx, true)
@@ -657,6 +780,8 @@ func TestUnspendRacingAMineReleaseWaitsForIt(t *testing.T) {
 
 // TestMineReleaseRacingAnUnspendWaitsForIt: the mine's release, restore first.
 func TestMineReleaseRacingAnUnspendWaitsForIt(t *testing.T) {
+	parallelOnOwnDatabase(t)
+
 	s, ctx := newTestStore(t)
 
 	parent, spends := mempoolParentSpent(t, s, ctx, true)
@@ -669,6 +794,8 @@ func TestMineReleaseRacingAnUnspendWaitsForIt(t *testing.T) {
 // only on its containment row in tx_mined, unlocked while its coin is being restored, unlock
 // first.
 func TestUnspendRacingAnUnlockOfAContainmentRowWaitsForIt(t *testing.T) {
+	parallelOnOwnDatabase(t)
+
 	s, ctx := newTestStore(t)
 
 	parent, spends, _ := lockedStampedParentSpent(t, s, ctx)
@@ -682,6 +809,8 @@ func TestUnspendRacingAnUnlockOfAContainmentRowWaitsForIt(t *testing.T) {
 // a statement with the coin update, the coin update still read the snapshot taken before the
 // wait, missed the coin, and left it locked.
 func TestUnlockOfAContainmentRowRacingAnUnspendWaitsForIt(t *testing.T) {
+	parallelOnOwnDatabase(t)
+
 	s, ctx := newTestStore(t)
 
 	parent, spends, _ := lockedStampedParentSpent(t, s, ctx)

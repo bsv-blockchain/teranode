@@ -101,7 +101,7 @@ func TestPrunerClearedDAHIsRestampedOnLongestChain(t *testing.T) {
 	prunerSvc, err := provider.GetPrunerService()
 	require.NoError(t, err)
 
-	retention := store.settings.GetUtxoStoreBlockHeightRetention()
+	retention := store.settings.GetUtxoStoreSpentDeleteRetention()
 	require.NoError(t, store.SetBlockHeight(1000))
 
 	// a mined tx, no unspent outputs, DAH due at 1010
@@ -150,7 +150,7 @@ func TestMarkTransactionsOnLongestChain_DAHRules(t *testing.T) {
 
 	store, _ := setup(ctx, t)
 
-	retention := int64(store.settings.GetUtxoStoreBlockHeightRetention())
+	retention := int64(store.settings.GetUtxoStoreSpentDeleteRetention())
 	require.NotZero(t, retention)
 	require.NoError(t, store.SetBlockHeight(1000))
 

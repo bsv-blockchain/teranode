@@ -23,6 +23,7 @@ import (
 	"github.com/bsv-blockchain/teranode/settings"
 	"github.com/bsv-blockchain/teranode/stores/blockchain/options"
 	"github.com/bsv-blockchain/teranode/util"
+	"github.com/bsv-blockchain/teranode/util/lane"
 	"github.com/bsv-blockchain/teranode/util/tracing"
 	"github.com/bsv-blockchain/teranode/util/usql"
 	"github.com/jackc/pgx/v5/pgconn"
@@ -316,18 +317,47 @@ func (s *SQL) storeBlockAttempt(ctx context.Context, block *model.Block, peerID 
 	// transaction grows with the fork's depth but not with the size of the blocks: it
 	// touches block rows only, never transactions or coins.
 	//
-	// The common extend keeps its single auto-committed INSERT, which already writes
-	// the correct flag and needs no repair.
+	// The common extend without lane map rows keeps its single auto-committed INSERT,
+	// which already writes the correct flag and needs no repair. With rows, at
+	// utxostore_laneMigration shadow, it is one transaction holding the INSERT and the rows.
 	var (
 		newBlockID    uint64
+		parentID      uint64
 		height        uint32
 		storedInvalid bool
 		reconcileErr  error
 		err           error
 	)
 
-	if onMainChain {
-		newBlockID, height, _, storedInvalid, err = s.storeBlock(ctx, s.db, block, peerID, storeBlockOptions, onMainChain)
+	// The block's lane map rows, at utxostore_laneMigration shadow, go in the block's own
+	// transaction (insertLaneMapRowsWithBlock). An invalid block gets none.
+	laneRows, laneRowsRefused := s.checkedLaneMapRows(block, storeBlockOptions)
+
+	if laneRows != nil {
+		// On SQLite the lane write lock is a process mutex only the holder of the whole
+		// transaction can take, before it begins: see insertLaneMapRowsTx.
+		unlockLanes := s.lockLaneProcess()
+		defer unlockLanes()
+	}
+
+	if onMainChain && laneRows != nil {
+		// The common extend, with its rows: one transaction holding the INSERT and the rows,
+		// instead of the auto-committed INSERT below.
+		err = s.db.RetryTx(ctx, nil, func(tx *sql.Tx) error {
+			var storeErr error
+
+			newBlockID, height, _, storedInvalid, parentID, storeErr = s.storeBlock(ctx, tx, block, peerID, storeBlockOptions, onMainChain)
+			if storeErr != nil || storedInvalid {
+				return storeErr
+			}
+
+			return s.insertLaneMapRowsWithBlock(ctx, tx, block, newBlockID, laneRows)
+		})
+		if err != nil {
+			return 0, height, s.typedStoreBlockError(err, block)
+		}
+	} else if onMainChain {
+		newBlockID, height, _, storedInvalid, parentID, err = s.storeBlock(ctx, s.db, block, peerID, storeBlockOptions, onMainChain)
 		if err != nil {
 			return 0, height, s.typedStoreBlockError(err, block)
 		}
@@ -390,7 +420,7 @@ func (s *SQL) storeBlockAttempt(ctx context.Context, block *model.Block, peerID 
 				}
 			}
 
-			newBlockID, height, _, storedInvalid, storeErr = s.storeBlock(ctx, tx, block, peerID, storeBlockOptions, onMainChain)
+			newBlockID, height, _, storedInvalid, parentID, storeErr = s.storeBlock(ctx, tx, block, peerID, storeBlockOptions, onMainChain)
 			if storeErr != nil {
 				return storeErr
 			}
@@ -410,6 +440,12 @@ func (s *SQL) storeBlockAttempt(ctx context.Context, block *model.Block, peerID 
 			// still seen.
 			if forkErr := s.rejectForkBelowPassedCheckpoint(block.Hash(), height, bestHeight); forkErr != nil {
 				return forkErr
+			}
+
+			if laneRows != nil {
+				if storeErr = s.insertLaneMapRowsWithBlock(ctx, tx, block, newBlockID, laneRows); storeErr != nil {
+					return storeErr
+				}
 			}
 
 			reconcile := func() (bool, int64, error) {
@@ -491,11 +527,24 @@ func (s *SQL) storeBlockAttempt(ctx context.Context, block *model.Block, peerID 
 		}
 	}
 
+	// The block is stored: count what this attempt did with its rows, once. A block stored as
+	// invalid, asked for or inherited from an invalid parent, takes no rows, so it counts nothing,
+	// whatever an earlier attempt of the same store did with them.
+	if !storedInvalid {
+		if laneRowsRefused {
+			lane.CountRowInsertFailure(storeBlockOptions.LaneMetricsBlock())
+		}
+
+		if laneRows != nil {
+			laneRows.observe()
+		}
+	}
+
 	// Cache the timestamp only once the row is committed. Doing it inside storeBlock
 	// let a rolled-back fork attempt leave an entry with no row behind it, which the
 	// next block's median-time-past would then read.
 	if !storedInvalid {
-		s.blockTimestampCache.Add(height, block.Header.Timestamp)
+		s.blockTimestampCache.Add(newBlockID, parentID, block.Header.Timestamp)
 	}
 
 	// Reset response cache to invalidate cached best block ID and headers
@@ -587,7 +636,6 @@ func (s *SQL) storeBlockAttempt(ctx context.Context, block *model.Block, peerID 
 		s.updateMaxBlockID(newBlockID)
 
 		if s.useInMemoryChainCheck {
-			s.blockTimestampCache.Clear()
 			s.resetChainWalkCache()
 
 			rebuildCtx, rebuildCancel := context.WithTimeout(context.Background(), rebuildOffChainSetTimeout)
@@ -648,7 +696,6 @@ func (s *SQL) storeBlockAttempt(ctx context.Context, block *model.Block, peerID 
 			}
 		}
 		if s.useInMemoryChainCheck {
-			s.blockTimestampCache.Clear()
 			s.updateMaxBlockID(newBlockID)
 			rebuildCtx, rebuildCancel := context.WithTimeout(context.Background(), rebuildOffChainSetTimeout)
 			defer rebuildCancel()
@@ -666,7 +713,6 @@ func (s *SQL) storeBlockAttempt(ctx context.Context, block *model.Block, peerID 
 		rebuildCtx, rebuildCancel := context.WithTimeout(context.Background(), rebuildOffChainSetTimeout)
 		defer rebuildCancel()
 		if s.useInMemoryChainCheck {
-			s.blockTimestampCache.Clear()
 			s.updateMaxBlockID(newBlockID)
 			s.resetChainWalkCache()
 		}
@@ -830,9 +876,11 @@ type execQuerier interface {
 //   - uint32: The height of the block in the blockchain
 //   - []byte: The calculated cumulative chain work for this block as a byte array
 //   - bool: Whether the row was written invalid, by request or inherited from an invalid parent
+//   - uint64: The parent block's database ID, which StoreBlock records with the new block in the
+//     median-time cache once the row is committed
 //   - error: Any error encountered during the operation, including validation failures. A
 //     failed INSERT returns the driver's error unwrapped; StoreBlock types it
-func (s *SQL) storeBlock(ctx context.Context, exec execQuerier, block *model.Block, peerID string, storeBlockOptions options.StoreBlockOptions, onMainChain bool) (uint64, uint32, []byte, bool, error) {
+func (s *SQL) storeBlock(ctx context.Context, exec execQuerier, block *model.Block, peerID string, storeBlockOptions options.StoreBlockOptions, onMainChain bool) (uint64, uint32, []byte, bool, uint64, error) {
 	var (
 		coinbaseTxID string
 		q            string
@@ -845,7 +893,7 @@ func (s *SQL) storeBlock(ctx context.Context, exec execQuerier, block *model.Blo
 	genesis, height, previousBlockID, previousChainWork, previousBlockInvalid, err := s.getPreviousBlockData(ctx, coinbaseTxID, block)
 	if err != nil {
 		s.logger.Errorf("[StoreBlock] Failed to get previous block data for block %s: %v", block.Hash().String(), err)
-		return 0, 0, nil, false, err
+		return 0, 0, nil, false, 0, err
 	}
 
 	storeAsInvalid := previousBlockInvalid || storeBlockOptions.Invalid
@@ -864,7 +912,7 @@ func (s *SQL) storeBlock(ctx context.Context, exec execQuerier, block *model.Blo
 	// branch of getPreviousBlockData does not start enforcing anything on genesis.
 	if !storeAsInvalid {
 		if err := s.validateCoinbaseHeight(block, height); err != nil {
-			return 0, 0, nil, false, err
+			return 0, 0, nil, false, 0, err
 		}
 	}
 
@@ -880,7 +928,7 @@ func (s *SQL) storeBlock(ctx context.Context, exec execQuerier, block *model.Blo
 
 	// Genesis blocks cannot have custom IDs (except during initialization with ID=0)
 	if genesis && storeBlockOptions.ID > 0 {
-		return 0, 0, nil, false, errors.NewInvalidArgumentError("genesis block cannot have custom ID")
+		return 0, 0, nil, false, 0, errors.NewInvalidArgumentError("genesis block cannot have custom ID")
 	}
 
 	// A caller-chosen id must be the one reserved for this hash, because the
@@ -889,7 +937,7 @@ func (s *SQL) storeBlock(ctx context.Context, exec execQuerier, block *model.Blo
 	if useCustomID && !genesis {
 		alreadyStored, err := s.checkCallerSuppliedBlockID(ctx, block.Hash(), storeBlockOptions.ID)
 		if err != nil {
-			return 0, 0, nil, false, err
+			return 0, 0, nil, false, 0, err
 		}
 
 		// A hash that is already stored goes on to the INSERT, which returns
@@ -897,10 +945,11 @@ func (s *SQL) storeBlock(ctx context.Context, exec execQuerier, block *model.Blo
 		// attempt landed treat that as success, so a late caller still holding a
 		// refused id must not get the id-order refusal, nor drop a reservation.
 		//
-		// Checked before the INSERT, because the extend path auto-commits it. This
-		// runs for a block stored invalid too, unlike the BIP34 guard above: the
-		// rule is about the row's place in the parent_id graph, which the ancestry
-		// walks follow whatever the invalid flag says, not about the block's validity.
+		// Checked before the INSERT, because the extend path without lane map rows
+		// auto-commits it. This runs for a block stored invalid too, unlike the BIP34
+		// guard above: the rule is about the row's place in the parent_id graph, which
+		// the ancestry walks follow whatever the invalid flag says, not about the
+		// block's validity.
 		if err := checkBlockIDAboveParent(block, storeBlockOptions.ID, previousBlockID); err != nil && !alreadyStored {
 			// The reservation is stale. Drop it so the caller's next AssignBlockID
 			// takes a fresh id above the parent, rather than being refused with the
@@ -910,7 +959,7 @@ func (s *SQL) storeBlock(ctx context.Context, exec execQuerier, block *model.Blo
 			// legacy park's retry.
 			s.dropBlockIDReservation(ctx, block.Hash(), storeBlockOptions.ID)
 
-			return 0, 0, nil, false, err
+			return 0, 0, nil, false, 0, err
 		}
 	}
 
@@ -1046,19 +1095,19 @@ RETURNING id
 
 	cumulativeChainWorkBytes, err := calculateAndPrepareChainWork(previousChainWork, block)
 	if err != nil {
-		return 0, 0, nil, false, err // Return error from calculation
+		return 0, 0, nil, false, 0, err // Return error from calculation
 	}
 
 	// Calculate Median Time Past (MTP) for this block
 	medianTimePast, err := s.calculateMedianTimePastForHeight(ctx, height, previousBlockID)
 	if err != nil {
 		s.logger.Errorf("[StoreBlock] Failed to calculate MTP for height %d (CSVHeight=%d): %v", height, s.chainParams.CSVHeight, err)
-		return 0, 0, nil, false, err
+		return 0, 0, nil, false, 0, err
 	}
 
 	subtreeBytes, err := block.SubTreeBytes()
 	if err != nil {
-		return 0, 0, nil, false, errors.NewStorageError("failed to get subtree bytes", err)
+		return 0, 0, nil, false, 0, errors.NewStorageError("failed to get subtree bytes", err)
 	}
 
 	coinbaseBytes := []byte{}
@@ -1148,26 +1197,26 @@ RETURNING id
 		// Returned raw: the fork path runs this inside RetryTx, which classifies a
 		// driver error by its concrete type. StoreBlock types it afterwards through
 		// typedStoreBlockError.
-		return 0, 0, nil, false, err
+		return 0, 0, nil, false, 0, err
 	}
 
 	defer rows.Close()
 
 	rowFound := rows.Next()
 	if !rowFound {
-		return 0, 0, nil, false, errors.NewBlockExistsError("block already exists: %s", block.Hash())
+		return 0, 0, nil, false, 0, errors.NewBlockExistsError("block already exists: %s", block.Hash())
 	}
 
 	var newBlockID uint64
 	if err = rows.Scan(&newBlockID); err != nil {
-		return 0, 0, nil, false, errors.NewStorageError("failed to scan new block id", err)
+		return 0, 0, nil, false, 0, errors.NewStorageError("failed to scan new block id", err)
 	}
 
 	// The MTP timestamp cache is updated by StoreBlock once the row has committed,
 	// never here: on the fork path this runs inside a transaction that may still
 	// roll back.
 
-	return newBlockID, height, cumulativeChainWorkBytes, storeAsInvalid, nil
+	return newBlockID, height, cumulativeChainWorkBytes, storeAsInvalid, previousBlockID, nil
 }
 
 // checkBlockIDAboveParent refuses a block whose id is not above its parent's id.
@@ -1493,18 +1542,14 @@ func (s *SQL) calculateMedianTimePastForHeight(ctx context.Context, height uint3
 		return 0, nil
 	}
 
-	// Calculate the range: [height-11, height-1] (previous 11 blocks)
-	startHeight := height - medianTimeBlocks
-	endHeight := height - 1
-
-	// Fast path: check in-memory cache before hitting the database.
-	if cached := s.blockTimestampCache.GetRange(startHeight, endHeight); cached != nil {
+	// Fast path: follow the parent block's own parent links through the in-memory cache.
+	if cached := s.blockTimestampCache.Ancestors(parentBlockID, medianTimeBlocks); cached != nil {
 		return calculateMTPFromTimestamps(cached)
 	}
 
-	// Slow path: walk back through the parent chain from the parent block.
-	// This ensures we only get timestamps from the actual chain being extended,
-	// not from fork blocks that happen to share the same height range.
+	// Slow path: walk back through the parent chain from the parent block in SQL, which also
+	// fills the cache. Like the fast path, it only reads the chain being extended, never fork
+	// blocks that happen to share the same heights.
 	timestamps, err := s.fetchBlockTimestampsByParentChain(ctx, parentBlockID, medianTimeBlocks)
 	if err != nil {
 		return 0, err
@@ -1520,16 +1565,18 @@ func (s *SQL) calculateMedianTimePastForHeight(ctx context.Context, height uint3
 func (s *SQL) fetchBlockTimestampsByParentChain(ctx context.Context, startBlockID uint64, count int) ([]uint32, error) {
 	q := `
 		WITH RECURSIVE chain AS (
-			SELECT block_time, parent_id, 1 AS depth
+			SELECT id, block_time, parent_id, 1 AS depth
 			FROM blocks WHERE id = $1
 			UNION ALL
-			SELECT b.block_time, b.parent_id, c.depth + 1
+			SELECT b.id, b.block_time, b.parent_id, c.depth + 1
 			FROM blocks b
 			JOIN chain c ON b.id = c.parent_id
 			WHERE c.depth < $2
 		)
-		SELECT block_time FROM chain ORDER BY depth DESC
+		SELECT id, COALESCE(parent_id, 0), block_time FROM chain ORDER BY depth DESC
 	`
+	s.parentWalkQueries.Add(1)
+
 	rows, err := s.db.QueryContext(ctx, q, startBlockID, count)
 	if err != nil {
 		return nil, errors.NewStorageError("failed to walk parent chain from block ID %d for %d blocks", startBlockID, count, err)
@@ -1538,10 +1585,18 @@ func (s *SQL) fetchBlockTimestampsByParentChain(ctx context.Context, startBlockI
 
 	timestamps := make([]uint32, 0, count)
 	for rows.Next() {
-		var blockTime uint32
-		if err := rows.Scan(&blockTime); err != nil {
+		var (
+			id, parentID uint64
+			blockTime    uint32
+		)
+
+		if err := rows.Scan(&id, &parentID, &blockTime); err != nil {
 			return nil, errors.NewStorageError("failed to scan block timestamp", err)
 		}
+
+		// These rows are committed ancestors of the block being stored, so caching them is safe
+		// whether or not that block's own write commits.
+		s.blockTimestampCache.Add(id, parentID, blockTime)
 		timestamps = append(timestamps, blockTime)
 	}
 

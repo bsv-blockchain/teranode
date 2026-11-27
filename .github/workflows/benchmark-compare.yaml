@@ -27,12 +27,24 @@ jobs:
           - group: subtreeprocessor-unit
             packages: ./services/blockassembly/subtreeprocessor
             bench_filter: "BenchmarkDiskTxMap|BenchmarkReorg|BenchmarkQueue|BenchmarkAtomicPointer|BenchmarkTxMap|BenchmarkChannel"
+            # Ops take 3ns to 0.6s; at 100ms the footprint rows run once a sample. 6 samples a
+            # side, as for sizing below, so benchstat can call a change at p < 0.05.
+            benchtime: 100ms
+            count: 6
           - group: subtreeprocessor-subtree
             packages: ./services/blockassembly/subtreeprocessor
             bench_filter: "BenchmarkDirect|BenchmarkSubtree|BenchmarkParallel|BenchmarkSequential|BenchmarkProcess"
+            # Ops take 24ns to 20ms. Shorter samples drift apart between two runs of the same code
+            # on one runner: at 100ms or 200ms half the same-code pairs flagged a row, at 300ms 2 of 12.
+            benchtime: 300ms
+            count: 6
           - group: subtreeprocessor-heavy
             packages: ./services/blockassembly/subtreeprocessor
             bench_filter: "^(BenchmarkBlockAssembler_AddTx|BenchmarkAddNode|BenchmarkAddNodeWithMap)$"
+            # Each of these times one fixed workload and ignores b.N, so a duration benchtime
+            # that reruns it at N=2 would report half its time. 1x runs it once a sample.
+            benchtime: 1x
+            count: 6
           - group: blockvalidation
             packages: ./services/blockvalidation
           - group: subtreevalidation-buffer
@@ -44,6 +56,11 @@ jobs:
           - group: subtreevalidation-sizing
             packages: ./services/subtreevalidation
             bench_filter: "BenchmarkSubtreeSizes|BenchmarkBlockSizeScaling|BenchmarkSubtreeAllocations|BenchmarkSubtreeProcessor|BenchmarkStreamingProcessor"
+            # Each op takes 2µs to 2ms, so 100ms still runs 50 or more iterations of it. benchstat
+            # needs 4 samples a side to call any difference at p < 0.05 and 6 for a confidence
+            # interval; at the default count of 3 it reports every change as "~".
+            benchtime: 100ms
+            count: 6
           - group: blockchain
             packages: ./services/blockchain/work
           - group: blockchain-sql
@@ -78,10 +95,18 @@ jobs:
           #     ./util/usql
           #     ./test/consensus
     steps:
+      # Nothing here reads git history, so the default depth-1 clone is enough.
       - name: Checkout PR branch
         uses: actions/checkout@v4
-        with:
-          fetch-depth: 0
+
+      # The checkout above is GitHub's merge of the PR into main. Its first parent is the
+      # main commit that merge contains, so the base side runs exactly that commit.
+      - name: Find PR base
+        id: base
+        run: |
+          sha=$(git cat-file -p HEAD | awk '/^parent /{print $2; exit}')
+          test -n "$sha"
+          echo "sha=$sha" >> "$GITHUB_OUTPUT"
 
       - name: Set up Go
         uses: actions/setup-go@v5
@@ -89,34 +114,61 @@ jobs:
           go-version: ${{ env.GO_VERSION }}
           cache: false
 
-      # Benchmarks run -bench without -race: module cache only.
+      # Benchmarks build without -race, so the -race build cache misses; the
+      # benchmark build cache (saved by main's bench-build-cache job) holds these
+      # packages built with the flags used below; the action adds -trimpath, so
+      # the base side, built under main/, hits it too.
       - name: Restore Go caches
         uses: ./.github/actions/go-cache
         with:
           build_cache: 'false'
+          bench_build_cache: 'true'
 
-      - name: Run PR benchmarks
-        run: |
-          BENCH_FILTER="${{ matrix.bench_filter || '.' }}"
-          go test -bench="$BENCH_FILTER" -benchmem -benchtime=1s -short -timeout=25m -count=3 -run=^$ \
-            -tags "testtxmetacache" \
-            ${{ matrix.packages }} \
-            | tee pr-${{ matrix.group }}.txt
-
-      - name: Checkout main
+      # Every group runs the same baseline, and the report names it. The path
+      # stays "main" for the steps below.
+      - name: Checkout PR base
         uses: actions/checkout@v4
         with:
-          ref: main
+          ref: ${{ steps.base.outputs.sha }}
           path: main
 
-      - name: Run main benchmarks
+      # One test binary per package and side, so the timed runs below compile nothing.
+      - name: Build benchmark binaries
         run: |
-          cd main
+          i=0
+          for pkg in ${{ matrix.packages }}; do
+            go test -c -tags testtxmetacache -o "$RUNNER_TEMP/bench/pr/$i.test" "$pkg"
+            (cd main && go test -c -tags testtxmetacache -o "$RUNNER_TEMP/bench/main/$i.test" "$pkg")
+            i=$((i + 1))
+          done
+
+      # The two sides take turns, one sample each, count times over. When all of one side
+      # ran before the other, every false flag measured on same-code runs read the first
+      # side as slower, and CI always ran the PR side first.
+      - name: Run benchmarks, alternating PR and base
+        run: |
           BENCH_FILTER="${{ matrix.bench_filter || '.' }}"
-          go test -bench="$BENCH_FILTER" -benchmem -benchtime=1s -short -timeout=25m -count=3 -run=^$ \
-            -tags "testtxmetacache" \
-            ${{ matrix.packages }} \
-            | tee ../main-${{ matrix.group }}.txt
+
+          # $1: pr or main, the binaries to run; $2: that side's source root; $3: output file.
+          run_side() {
+            i=0
+            for pkg in ${{ matrix.packages }}; do
+              bin="$RUNNER_TEMP/bench/$1/$i.test"
+              i=$((i + 1))
+              # go test -c writes no binary for a package without test files.
+              [ -x "$bin" ] || continue
+              (cd "$2/$pkg" && "$bin" -test.bench="$BENCH_FILTER" -test.benchmem \
+                -test.benchtime=${{ matrix.benchtime || '1s' }} -test.short -test.timeout=25m \
+                -test.count=1 -test.run='^$') | tee -a "$3"
+            done
+          }
+
+          for round in $(seq ${{ matrix.count || 3 }}); do
+            echo "::group::round $round"
+            run_side pr . "pr-${{ matrix.group }}.txt"
+            run_side main main "main-${{ matrix.group }}.txt"
+            echo "::endgroup::"
+          done
 
       - name: Upload results
         if: always()
@@ -168,11 +220,14 @@ jobs:
           echo "PR benchmarks: $(grep -c '^Benchmark' pr-benchmark-output.txt) results"
           echo "Main benchmarks: $(grep -c '^Benchmark' main-benchmark-output.txt) results"
 
+      # The same merge commit the bench jobs checked out, so its first parent is the
+      # commit they ran as the main side.
       - name: Capture baseline SHA
         id: baseline_sha
         run: |
-          SHA=$(git log --format='%H' origin/main -1 2>/dev/null || echo "unknown")
-          echo "value=$SHA" >> "$GITHUB_OUTPUT"
+          sha=$(git cat-file -p HEAD | awk '/^parent /{print $2; exit}')
+          test -n "$sha"
+          echo "value=$sha" >> "$GITHUB_OUTPUT"
 
       - name: Compare benchmarks
         id: compare
@@ -185,7 +240,7 @@ jobs:
             -alpha 0.05 \
             -baseline-sha "${{ steps.baseline_sha.outputs.value }}" \
             -current-sha "${{ github.sha }}" \
-            -baseline-ref "main" \
+            -baseline-ref "${{ github.event.pull_request.base.ref }}" \
             -current-ref "PR-${{ github.event.pull_request.number }}"
 
       - name: Display report

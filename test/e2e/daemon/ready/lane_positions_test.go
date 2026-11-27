@@ -2,6 +2,7 @@ package smoke
 
 import (
 	"net/url"
+	"slices"
 	"testing"
 	"time"
 
@@ -16,8 +17,40 @@ import (
 	tpostgres "github.com/bsv-blockchain/teranode/test/utils/postgres"
 	"github.com/bsv-blockchain/teranode/test/utils/transactions"
 	"github.com/bsv-blockchain/teranode/util/lane"
+	"github.com/bsv-blockchain/teranode/util/lanereader"
+	"github.com/prometheus/client_golang/prometheus"
 	"github.com/stretchr/testify/require"
 )
+
+// laneReaderAnswers is teranode_lane_reader_answers_total for one reader, over every via and the
+// given kinds, or every kind when none is given.
+func laneReaderAnswers(t *testing.T, reader string, kinds ...string) float64 {
+	t.Helper()
+
+	families, err := prometheus.DefaultGatherer.Gather()
+	require.NoError(t, err)
+
+	var sum float64
+
+	for _, f := range families {
+		if f.GetName() != "teranode_lane_reader_answers_total" {
+			continue
+		}
+
+		for _, m := range f.GetMetric() {
+			labels := map[string]string{}
+			for _, l := range m.GetLabel() {
+				labels[l.GetName()] = l.GetValue()
+			}
+
+			if labels["reader"] == reader && (len(kinds) == 0 || slices.Contains(kinds, labels["kind"])) {
+				sum += m.GetCounter().GetValue()
+			}
+		}
+	}
+
+	return sum
+}
 
 // lanePositionSettings is the lane migration at shadow, with small grants.
 func lanePositionSettings(extra func(*settings.Settings)) func(*settings.Settings) {
@@ -119,6 +152,16 @@ func runLanePositionsScenario(t *testing.T, td *daemon.TestDaemon, restart func(
 		return md.LanePosition
 	}
 
+	// The node keeps a lane index of the map, following the chain to its tip.
+	require.Eventually(t, func() bool {
+		s := lanereader.Current().Snapshot() // nil-safe: nil until the index connects
+		return s != nil && s.TipHeight() == block4.Height
+	}, 10*time.Second, 50*time.Millisecond)
+
+	validatorAnswers := laneReaderAnswers(t, lanereader.ReaderValidator)
+	validatorCoinbases := laneReaderAnswers(t, lanereader.ReaderValidator, lanereader.KindCoinbase)
+	validatorDisagreements := laneReaderAnswers(t, lanereader.ReaderValidator, lanereader.KindTodayOnly, lanereader.KindLanesOnly, lanereader.KindDifferentBlock)
+
 	// The node validates tx0 and its validator stamps it.
 	tx0 := td.CreateTransactionWithOptions(t,
 		transactions.WithInput(block1.CoinbaseTx, 0),
@@ -133,6 +176,14 @@ func runLanePositionsScenario(t *testing.T, td *daemon.TestDaemon, restart func(
 
 	first := lanePosition(td, tx0)
 	require.True(t, lane.Valid(first), "a record the node validated carries a lane position")
+
+	// Its parent check was answered from the lane index too, beside the store's answer, and counted.
+	require.Greater(t, laneReaderAnswers(t, lanereader.ReaderValidator), validatorAnswers)
+
+	// tx0's parent is block1's coinbase, which holds a lane position no block row holds: it counts
+	// coinbase, not a disagreement.
+	require.Greater(t, laneReaderAnswers(t, lanereader.ReaderValidator, lanereader.KindCoinbase), validatorCoinbases)
+	require.Equal(t, validatorDisagreements, laneReaderAnswers(t, lanereader.ReaderValidator, lanereader.KindTodayOnly, lanereader.KindLanesOnly, lanereader.KindDifferentBlock))
 
 	firstLane, firstPos := lane.Unpack(first)
 	t.Logf("tx0 %s: lane %d position %d", tx0.TxIDChainHash(), firstLane, firstPos)

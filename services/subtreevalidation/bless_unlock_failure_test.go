@@ -92,7 +92,7 @@ func newUnlockFailureServer(t *testing.T, remote bool, unlockFailures int64) (*S
 	require.NoError(t, err)
 
 	blockAssembly := blockassembly.NewMock()
-	blockAssembly.On("Store", mock.Anything, mock.Anything, mock.Anything, mock.Anything, mock.Anything).
+	blockAssembly.On("Store", mock.Anything, mock.Anything, mock.Anything, mock.Anything, mock.Anything, mock.Anything).
 		Return(true, nil).Times(2)
 
 	realValidator, err := validator.New(ctx, logger, tSettings, store,
@@ -233,6 +233,32 @@ func TestBlessMissingTransactions_LevelUnlockFailureLeavesParentLocked(t *testin
 	require.True(t, stored.Locked)
 }
 
+// TestBlessMissingTransactions_NilTxReturnsBeforeSpawning is the regression for #1974: a nil
+// transaction must be rejected before any goroutine starts. The old nil check lived inside the
+// per-level loop, so a nil mid-level returned without g.Wait() and leaked the goroutines already
+// started for that level — they kept spending/creating and writing txMetaSlice after this function
+// (and ValidateSubtreeInternal) had returned.
+func TestBlessMissingTransactions_NilTxReturnsBeforeSpawning(t *testing.T) {
+	ctx := context.Background()
+
+	server, store, txs, _ := newUnlockFailureServer(t, true, alwaysFail)
+	server.settings.SubtreeValidation.SpendBatcherSize = 10
+
+	valid := txs[1]
+	missing := []missingTx{{tx: valid, idx: 0}, {tx: nil, idx: 1}}
+	txMetaSlice := make([]metaSliceItem, len(missing))
+
+	err := server.blessMissingTransactions(ctx, chainhash.Hash{}, missing, "", "", txMetaSlice, 2, map[uint32]bool{}, false)
+	require.Error(t, err)
+	require.Contains(t, err.Error(), "missing transaction is nil")
+
+	// The nil was caught before any goroutine started: the valid tx was neither recorded in the
+	// slice nor blessed into the store, so there is no late writer racing this return.
+	require.False(t, txMetaSlice[0].isSet, "no tx may be processed when a nil is present in the batch")
+	stored := &meta.Data{}
+	require.Error(t, store.GetMeta(ctx, valid.TxIDChainHash(), stored), "the valid tx must not be blessed when the batch is rejected")
+}
+
 // unreadableStore writes normally and fails GetMeta, which is how a store that errors on reading
 // back the record of an already-accepted transaction looks. With only set, the failures are limited
 // to that one hash so a test can fail one read while the rest of the path still works.
@@ -348,7 +374,7 @@ func TestProcessTransactionsInLevels_UnlockFailedParentGetsUnlocked(t *testing.T
 		err:       errors.NewTxUnlockFailedError("[Validate] error marking tx as spendable", errors.NewProcessingError("context deadline exceeded")),
 	}
 
-	require.NoError(t, server.processTransactionsInLevels(ctx, []*bt.Tx{tx}, chainhash.Hash{}, chainhash.Hash{}, 100, 0, 0, map[uint32]bool{}, true))
+	require.NoError(t, server.processTransactionsInLevels(ctx, []*bt.Tx{tx}, chainhash.Hash{}, chainhash.Hash{}, 100, 0, 0, candidateForkMTPs{}, map[uint32]bool{}, true))
 
 	store.AssertCalled(t, "SetLocked", mock.Anything, []chainhash.Hash{*tx.TxIDChainHash()}, false)
 }
@@ -403,7 +429,7 @@ func TestProcessTransactionsInLevels_InvalidSiblingDoesNotSkipUnlock(t *testing.
 		invalidFor:      *sibling.TxIDChainHash(),
 	}
 
-	err = server.processTransactionsInLevels(ctx, []*bt.Tx{accepted, sibling}, chainhash.Hash{}, chainhash.Hash{}, 100, 0, 0, map[uint32]bool{}, true)
+	err = server.processTransactionsInLevels(ctx, []*bt.Tx{accepted, sibling}, chainhash.Hash{}, chainhash.Hash{}, 100, 0, 0, candidateForkMTPs{}, map[uint32]bool{}, true)
 	require.Error(t, err, "the invalid sibling still fails the level")
 
 	store.AssertCalled(t, "SetLocked", mock.Anything, []chainhash.Hash{*accepted.TxIDChainHash()}, false)
@@ -531,7 +557,7 @@ func TestProcessTransactionsInLevels_BlockSpendRuleViolationFailsTheLevel(t *tes
 				err:       errors.NewProcessingError("[Validate] error spending utxos", tc.cause),
 			}
 
-			err = server.processTransactionsInLevels(context.Background(), []*bt.Tx{tx}, chainhash.Hash{}, chainhash.Hash{}, 100, 0, 0, map[uint32]bool{}, true)
+			err = server.processTransactionsInLevels(context.Background(), []*bt.Tx{tx}, chainhash.Hash{}, chainhash.Hash{}, 100, 0, 0, candidateForkMTPs{}, map[uint32]bool{}, true)
 			require.Error(t, err)
 			require.True(t, errors.Is(err, tc.cause), "the store's code must survive the re-code")
 			require.Equal(t, tc.txInvalid, errors.Is(err, errors.ErrTxInvalid))

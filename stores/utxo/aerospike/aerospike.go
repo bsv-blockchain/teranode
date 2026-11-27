@@ -210,6 +210,10 @@ type Store struct {
 	// counted; a spend carries its position either way.
 	laneSlotWrites atomic.Bool
 
+	// conflictWALScans counts this store's WAL reads that scanned the set, as the process-wide
+	// metric does for every store.
+	conflictWALScans atomic.Int64
+
 	ctx                 context.Context // store the global context for things that run in the background
 	url                 *url.URL
 	client              *uaerospike.Client
@@ -259,6 +263,10 @@ type Store struct {
 	// runtime PARAMETER_ERROR demotes it back to false while batch goroutines
 	// read it concurrently (see demoteNativeOnUnsupported in native_op.go).
 	useNativeTeranodeOps atomic.Bool
+	// nativeReplayProtection records whether the native dispatcher proved the
+	// replay-protection semantics (probeNativeReplayProtection). When false the
+	// sub-ops that carry them stay on the UDF path; see useNativeForSubOp.
+	nativeReplayProtection atomic.Bool
 
 	// useNativeMarkLongestChain is whether the server also serves native sub-op 14, markLongestChain,
 	// which MarkTransactionsOnLongestChain uses in place of its expression write. Set by its own
@@ -297,8 +305,16 @@ type Store struct {
 	// namespace/setName never crosses Store instances.
 	batchKeysPool sync.Pool
 
+	// nativeProbes is a test-only override for the start-up probes initNativeTeranodeOps runs; nil
+	// means the store's own.
+	nativeProbes *nativeSupportProbes
+
 	// batchOperateFn is a test-only override for s.client.BatchOperate; nil means use the real client.
 	batchOperateFn func(*aerospike.BatchPolicy, []aerospike.BatchRecordIfc) aerospike.Error
+
+	// rollbackBeforeProbe is a test-only hook that rollbackPartialSpends runs right before its
+	// spender-existence probe; nil outside tests. A test uses it to prune the spender in that gap.
+	rollbackBeforeProbe func()
 
 	// lockPutFn is a test-only override for the creation lock's s.client.PutBins; nil means use the real client.
 	lockPutFn func(*aerospike.WritePolicy, *aerospike.Key, ...*aerospike.Bin) aerospike.Error
@@ -353,7 +369,10 @@ func New(ctx context.Context, logger ulogger.Logger, tSettings *settings.Setting
 		return nil, err
 	}
 
-	placeholderKey, err = aerospike.NewKey(namespace, "placeholderKey", "placeHolderKey")
+	// Set once: every New used to rewrite it while other stores' batchers read it.
+	placeholderKeyOnce.Do(func() {
+		placeholderKey, err = aerospike.NewKey(namespace, "placeholderKey", "placeHolderKey")
+	})
 	if err != nil {
 		log.Fatal("Failed to init placeholder key")
 	}
@@ -441,6 +460,13 @@ func New(ctx context.Context, logger ulogger.Logger, tSettings *settings.Setting
 	// or the cluster doesn't support the new opcode. See native_op.go.
 	s.initNativeTeranodeOps(ctx)
 
+	// Record utxostore_utxoBatchSize in the namespace on first open and
+	// refuse any later open that disagrees - the value is part of every
+	// coin's stored address. See layout_marker.go.
+	if err := s.enforceLayoutMarker(ctx); err != nil {
+		return nil, err
+	}
+
 	// Ensure index creation/wait is only done once per process
 	if pruner.IndexName != "" {
 		s.indexOnce.Do(func() {
@@ -492,8 +518,8 @@ func New(ctx context.Context, logger ulogger.Logger, tSettings *settings.Setting
 					}
 				}
 
-				// Read by ConflictingTxHashes. A server that cannot hold an
-				// expression index (before 8.1) leaves block validation on its
+				// Read by ConflictingTxHashes. Without it (no right to create
+				// indexes, or a failed create) block validation stays on its
 				// per-transaction fallback, which is correct but slow.
 				exists, err = s.indexExists(conflictingIndexName)
 				if err != nil {
@@ -503,7 +529,7 @@ func New(ctx context.Context, logger ulogger.Logger, tSettings *settings.Setting
 
 				if !exists {
 					if err := s.createExpressionIndexIfNotExists(conflictingIndexName, conflictingIndexExpression()); err != nil {
-						s.logger.Warnf("Failed to create %s (expression indexes need Aerospike 8.1 or later); block validation will read every transaction of an already-validated subtree: %v", conflictingIndexName, err)
+						s.logger.Warnf("Failed to create %s (expression indexes need Aerospike 8.1, the minimum Teranode supports); block validation will read every transaction of an already-validated subtree: %v", conflictingIndexName, err)
 					}
 				}
 			}
@@ -770,7 +796,7 @@ func (s *Store) effectiveBlockHeight(blockHeight uint32) uint32 {
 // setDeleteAtHeight UDF compute the same blockHeight + retention and MUST be kept
 // in sync with this function.
 func (s *Store) deleteAtHeightFor(blockHeight uint32) (uint32, bool) {
-	retention := s.settings.GetUtxoStoreBlockHeightRetention()
+	retention := s.settings.GetUtxoStoreSpentDeleteRetention()
 	if retention == 0 {
 		return 0, false
 	}
@@ -1613,7 +1639,7 @@ func (s *Store) ProcessExpiredPreservations(ctx context.Context, currentHeight u
 		// follow the master (see processBatchExpiredPreservations).
 		ops := []*aerospike.Operation{}
 
-		blockHeightRetention := s.settings.GetUtxoStoreBlockHeightRetention()
+		blockHeightRetention := s.settings.GetUtxoStoreSpentDeleteRetention()
 		if blockHeightRetention > 0 {
 			ops = append(ops,
 				aerospike.GetBinOp(fields.DeleteAtHeight.String()),
