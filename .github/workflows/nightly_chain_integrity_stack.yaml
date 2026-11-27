@@ -6,6 +6,8 @@ name: nightly-chain-integrity-stack
 # end-to-end suite and chaos-test's library run on the same stack. See
 # compose/chaostest/nightly.sh and compose/MULTINODE.md.
 on:
+  push:  # TEMPORARY: trial run on upstream before the PR; not for merge
+    branches: [chaostest/nightly-trial]
   schedule:
     - cron: '0 5 * * *'  # after nightly_tests (02:00) and fuzz (04:00), which share the runner pool
   workflow_dispatch:
