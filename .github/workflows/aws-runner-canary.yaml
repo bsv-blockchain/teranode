@@ -1,6 +1,6 @@
 name: AWS runner canary
 
-# Trial only: smoke-tests the self-hosted AWS spot runners (bsva-infra#41).
+# Trial only: smoke-tests the self-hosted AWS spot runner trial.
 # Runs on push to this branch only; never merged to main.
 on:
   push:

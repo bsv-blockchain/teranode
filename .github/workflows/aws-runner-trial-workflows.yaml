@@ -1,0 +1,672 @@
+name: AWS runner trial workflows
+
+# Trial only: runs the rest of the PR and main CI jobs on the self-hosted AWS
+# spot runner trial, on push to this branch only. Never merged to main.
+# Jobs copied from teranode_pr_smoketests.yaml, teranode_pr_tests.yaml (the
+# jobs aws-runner-trial-tests.yaml does not run), fuzz.yaml and the sonarqube
+# job of teranode_main_tests.yaml. Differences from the source jobs:
+# - runs-on: jobs that need the x86-only SV Node image (smoketest, legacy-sync,
+#   sequential) on bsva-aws-x64-8; everything else on the arm64 label of the
+#   same size as its hosted runner.
+# - Every job starts with a "Runner" step that prints the architecture, CPU
+#   count, EC2 instance type and life cycle, and the zstd version (cache
+#   compatibility).
+# - The Docker Hub logins run unconditionally: their PR-only if: is always
+#   false on a push event.
+# - Not copied: the ubuntu-latest jobs of teranode_pr_tests.yaml (test,
+#   js-unit-tests, filename-check-report, sonar-inputs), which have no AWS
+#   label of their size.
+# Per-job differences are noted at each job.
+
+on:
+  push:
+    branches:
+      - ci/aws-runner-canary
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: false
+
+permissions:
+  contents: read
+
+env:
+  REPO: teranode
+  SETTINGS_CONTEXT_DEFAULT: test
+  GO_VERSION: "1.27.0"
+
+jobs:
+  # ---------------------------------------------------------------------------
+  # teranode_pr_smoketests.yaml
+  # ---------------------------------------------------------------------------
+  smoketest:
+    name: smoketest (shard ${{ matrix.shard }})
+    # x64: the SV Node image is amd64 only.
+    runs-on: bsva-aws-x64-8
+    strategy:
+      fail-fast: false
+      matrix:
+        shard: [0, 1, 2]
+    steps:
+      - name: Runner
+        run: |
+          echo "arch: $(uname -m), cpus: $(nproc)"
+          t=$(curl -sf --max-time 2 -X PUT http://169.254.169.254/latest/api/token -H 'X-aws-ec2-metadata-token-ttl-seconds: 60' || true)
+          for k in instance-type instance-life-cycle; do
+            echo "$k: $(curl -sf --max-time 2 -H "X-aws-ec2-metadata-token: $t" "http://169.254.169.254/latest/meta-data/$k" || echo n/a)"
+          done
+          zstd --version || echo "zstd: not installed"
+
+      # Source: Docker Hub login only for internal PRs (if: on the PR head repo).
+      - name: Login to Docker Hub
+        uses: docker/login-action@5e57cd118135c172c3672efd75eb46360885c0ef # v3
+        with:
+          username: ${{ vars.DOCKER_ORG }}
+          password: ${{ secrets.DOCKER_ORG_TOKEN }}
+
+      - name: Checkout code
+        uses: actions/checkout@08eba0b27e820071cde6df949e0beb9ba4906955 # v4
+
+      - name: Set up Go
+        uses: actions/setup-go@d35c59abb061a4a6fb18e82ac0862c26744d6ab5 # v5
+        with:
+          go-version: ${{ env.GO_VERSION }}
+          cache: "false"
+
+      # The e2e -race cache built on main for this runner's architecture; the
+      # unit job's cache (ARM, with coverage) misses every teranode package here.
+      - name: Restore Go caches
+        uses: ./.github/actions/go-cache
+        with:
+          build_cache: 'false'
+          e2e_build_cache: 'true'
+
+      - name: Run Smoke tests
+        run: make smoketest SHARD=${{ matrix.shard }} TOTAL=3
+        env:
+          settings_context: ${{ env.SETTINGS_CONTEXT_DEFAULT }}
+
+      - name: Upload smoketest results
+        if: always()
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        with:
+          name: smoketest-shard-${{ matrix.shard }}-results
+          path: /tmp/teranode-test-results/smoketest-results.txt
+          retention-days: 2
+
+  prunertest:
+    name: prunertest
+    # arm64: TestPruner/TestBlobDeletion use aerospike (8.1, arm64) but no
+    # SV-node, so this moves to arm unlike smoketest/legacy-sync/sequential.
+    runs-on: bsva-aws-arm64-8
+    steps:
+      - name: Runner
+        run: |
+          echo "arch: $(uname -m), cpus: $(nproc)"
+          t=$(curl -sf --max-time 2 -X PUT http://169.254.169.254/latest/api/token -H 'X-aws-ec2-metadata-token-ttl-seconds: 60' || true)
+          for k in instance-type instance-life-cycle; do
+            echo "$k: $(curl -sf --max-time 2 -H "X-aws-ec2-metadata-token: $t" "http://169.254.169.254/latest/meta-data/$k" || echo n/a)"
+          done
+          zstd --version || echo "zstd: not installed"
+
+      # Source: Docker Hub login only for internal PRs (if: on the PR head repo).
+      - name: Login to Docker Hub
+        uses: docker/login-action@5e57cd118135c172c3672efd75eb46360885c0ef # v3
+        with:
+          username: ${{ vars.DOCKER_ORG }}
+          password: ${{ secrets.DOCKER_ORG_TOKEN }}
+
+      - name: Checkout code
+        uses: actions/checkout@08eba0b27e820071cde6df949e0beb9ba4906955 # v4
+
+      - name: Set up Go
+        uses: actions/setup-go@d35c59abb061a4a6fb18e82ac0862c26744d6ab5 # v5
+        with:
+          go-version: ${{ env.GO_VERSION }}
+          cache: "false"
+
+      # The e2e -race cache built on main for this runner's architecture; the
+      # unit job's cache (ARM, with coverage) misses every teranode package here.
+      - name: Restore Go caches
+        uses: ./.github/actions/go-cache
+        with:
+          build_cache: 'false'
+          e2e_build_cache: 'true'
+
+      - name: Run Pruner tests
+        run: make prunertest
+        continue-on-error: false
+        env:
+          settings_context: ${{ env.SETTINGS_CONTEXT_DEFAULT }}
+
+      - name: Upload prunertest results
+        if: always()
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        with:
+          name: prunertest-results
+          path: /tmp/teranode-test-results/prunertest-results.txt
+          retention-days: 2
+
+  legacy-sync:
+    name: legacy-sync
+    # x64: the SV Node image is amd64 only.
+    runs-on: bsva-aws-x64-8
+    steps:
+      - name: Runner
+        run: |
+          echo "arch: $(uname -m), cpus: $(nproc)"
+          t=$(curl -sf --max-time 2 -X PUT http://169.254.169.254/latest/api/token -H 'X-aws-ec2-metadata-token-ttl-seconds: 60' || true)
+          for k in instance-type instance-life-cycle; do
+            echo "$k: $(curl -sf --max-time 2 -H "X-aws-ec2-metadata-token: $t" "http://169.254.169.254/latest/meta-data/$k" || echo n/a)"
+          done
+          zstd --version || echo "zstd: not installed"
+
+      # Source: Docker Hub login only for internal PRs (if: on the PR head repo).
+      - name: Login to Docker Hub
+        uses: docker/login-action@5e57cd118135c172c3672efd75eb46360885c0ef # v3
+        with:
+          username: ${{ vars.DOCKER_ORG }}
+          password: ${{ secrets.DOCKER_ORG_TOKEN }}
+
+      - name: Checkout code
+        uses: actions/checkout@08eba0b27e820071cde6df949e0beb9ba4906955 # v4
+
+      - name: Set up Go
+        uses: actions/setup-go@d35c59abb061a4a6fb18e82ac0862c26744d6ab5 # v5
+        with:
+          go-version: ${{ env.GO_VERSION }}
+          cache: "false"
+
+      # The e2e -race cache built on main for this runner's architecture; the
+      # unit job's cache (ARM, with coverage) misses every teranode package here.
+      - name: Restore Go caches
+        uses: ./.github/actions/go-cache
+        with:
+          build_cache: 'false'
+          e2e_build_cache: 'true'
+
+      - name: Run Legacy Sync tests
+        run: make legacy-sync
+        continue-on-error: false
+        env:
+          settings_context: ${{ env.SETTINGS_CONTEXT_DEFAULT }}
+
+      - name: Upload legacy-sync results
+        if: always()
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        with:
+          name: legacy-sync-results
+          path: /tmp/teranode-test-results/legacy-sync-results.txt
+          retention-days: 2
+
+  chainintegrity:
+    name: chainintegrity
+    # arm64: no SV-node; images all arm64-capable (teranode multi-arch,
+    # aerospike-server:8.1 arm64, postgres + redpanda arm64).
+    runs-on: bsva-aws-arm64-8
+    steps:
+      - name: Runner
+        run: |
+          echo "arch: $(uname -m), cpus: $(nproc)"
+          t=$(curl -sf --max-time 2 -X PUT http://169.254.169.254/latest/api/token -H 'X-aws-ec2-metadata-token-ttl-seconds: 60' || true)
+          for k in instance-type instance-life-cycle; do
+            echo "$k: $(curl -sf --max-time 2 -H "X-aws-ec2-metadata-token: $t" "http://169.254.169.254/latest/meta-data/$k" || echo n/a)"
+          done
+          zstd --version || echo "zstd: not installed"
+
+      # Source: Docker Hub login only for internal PRs (if: on the PR head repo).
+      - name: Login to Docker Hub
+        uses: docker/login-action@5e57cd118135c172c3672efd75eb46360885c0ef # v3
+        with:
+          username: ${{ vars.DOCKER_ORG }}
+          password: ${{ secrets.DOCKER_ORG_TOKEN }}
+
+      - name: Checkout code
+        uses: actions/checkout@08eba0b27e820071cde6df949e0beb9ba4906955 # v4
+
+      - name: Set up Go
+        uses: actions/setup-go@d35c59abb061a4a6fb18e82ac0862c26744d6ab5 # v5
+        with:
+          go-version: ${{ env.GO_VERSION }}
+          cache: "false"
+
+      # The e2e -race cache built on main for this runner's architecture; the
+      # unit job's cache (ARM, with coverage) misses every teranode package here.
+      - name: Restore Go caches
+        uses: ./.github/actions/go-cache
+        with:
+          build_cache: 'false'
+          e2e_build_cache: 'true'
+
+      - name: Run Chain Integrity tests
+        run: make chainintegrity
+        continue-on-error: false
+        env:
+          settings_context: ${{ env.SETTINGS_CONTEXT_DEFAULT }}
+
+      - name: Upload chainintegrity results
+        if: always()
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        with:
+          name: chainintegrity-results
+          path: /tmp/teranode-test-results/chainintegrity-results.txt
+          retention-days: 2
+
+  sequential:
+    name: sequential (shard ${{ matrix.shard }})
+    # x64: the SV Node image is amd64 only.
+    runs-on: bsva-aws-x64-8
+    strategy:
+      fail-fast: false
+      matrix:
+        shard: [0, 1, 2, 3, 4, 5, 6]
+    steps:
+      - name: Runner
+        run: |
+          echo "arch: $(uname -m), cpus: $(nproc)"
+          t=$(curl -sf --max-time 2 -X PUT http://169.254.169.254/latest/api/token -H 'X-aws-ec2-metadata-token-ttl-seconds: 60' || true)
+          for k in instance-type instance-life-cycle; do
+            echo "$k: $(curl -sf --max-time 2 -H "X-aws-ec2-metadata-token: $t" "http://169.254.169.254/latest/meta-data/$k" || echo n/a)"
+          done
+          zstd --version || echo "zstd: not installed"
+
+      # Source: Docker Hub login only for internal PRs (if: on the PR head repo).
+      - name: Login to Docker Hub
+        uses: docker/login-action@5e57cd118135c172c3672efd75eb46360885c0ef # v3
+        with:
+          username: ${{ vars.DOCKER_ORG }}
+          password: ${{ secrets.DOCKER_ORG_TOKEN }}
+
+      - name: Checkout code
+        uses: actions/checkout@08eba0b27e820071cde6df949e0beb9ba4906955 # v4
+
+      - name: Set up Go
+        uses: actions/setup-go@d35c59abb061a4a6fb18e82ac0862c26744d6ab5 # v5
+        with:
+          go-version: ${{ env.GO_VERSION }}
+          cache: "false"
+
+      # The e2e -race cache built on main for this runner's architecture; the
+      # unit job's cache (ARM, with coverage) misses every teranode package here.
+      - name: Restore Go caches
+        uses: ./.github/actions/go-cache
+        with:
+          build_cache: 'false'
+          e2e_build_cache: 'true'
+
+      - name: Run sequential shard
+        run: make sequentialtest-shard SHARD=${{ matrix.shard }} TOTAL=7
+        env:
+          settings_context: ${{ env.SETTINGS_CONTEXT_DEFAULT }}
+
+      - name: Upload sequential shard results
+        if: always()
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        with:
+          name: sequentialtest-shard-${{ matrix.shard }}-results
+          path: /tmp/teranode-test-results/sequentialtest-shard-${{ matrix.shard }}-results.txt
+          retention-days: 2
+
+  # ---------------------------------------------------------------------------
+  # teranode_pr_tests.yaml (consensus-vectors and test-shard are in
+  # aws-runner-trial-tests.yaml)
+  # ---------------------------------------------------------------------------
+  golangci-lint:
+    name: golangci-lint
+    # arm64-safe: pure Go analysis, no containers (golangci-lint ships arm64).
+    runs-on: bsva-aws-arm64-8
+    # Source sets this workflow-wide.
+    env:
+      TESTCONTAINERS_RYUK_DISABLED: "true"
+    steps:
+      - name: Runner
+        run: |
+          echo "arch: $(uname -m), cpus: $(nproc)"
+          t=$(curl -sf --max-time 2 -X PUT http://169.254.169.254/latest/api/token -H 'X-aws-ec2-metadata-token-ttl-seconds: 60' || true)
+          for k in instance-type instance-life-cycle; do
+            echo "$k: $(curl -sf --max-time 2 -H "X-aws-ec2-metadata-token: $t" "http://169.254.169.254/latest/meta-data/$k" || echo n/a)"
+          done
+          zstd --version || echo "zstd: not installed"
+
+      - uses: actions/checkout@08eba0b27e820071cde6df949e0beb9ba4906955 # v4
+
+      - name: Forbid %w in errors.New* format strings
+        run: ./scripts/check_error_wrap_verbs.sh
+
+      - name: Cap tracing.WithLogMessage sites
+        run: make lint-tracing-info
+
+      # The test matrix's package and shard lists are kept by hand in this file
+      # and teranode_main_tests.yaml. A package left in the unit shard's
+      # TEST_EXCLUDE but in no other shard's TEST_PKGS would run nowhere.
+      - name: Check the test shard lists agree
+        run: .github/scripts/check-test-shards.sh
+
+      # Proves the shard check and merge-coverage.sh fail on the drift they target.
+      - name: Self-test the test shard and coverage merge scripts
+        run: .github/scripts/test-ci-scripts.sh
+
+      - uses: actions/setup-go@d35c59abb061a4a6fb18e82ac0862c26744d6ab5 # v5
+        with:
+          go-version: ${{ env.GO_VERSION }}
+          cache: false
+
+      # golangci typechecks (no -race) and the action caches its own build
+      # artifacts, so restore the module cache only.
+      - name: Restore Go caches
+        uses: ./.github/actions/go-cache
+        with:
+          build_cache: 'false'
+
+      # The Block Validation gap-proof tests sit behind the bvgaps build tag, which nothing else
+      # compiles; vet them so a rename in the code they exercise fails the PR.
+      - name: Vet gap-proof tests (bvgaps)
+        run: make vet-bvgaps
+
+      - name: golangci-lint with checkstyle report
+        uses: golangci/golangci-lint-action@4afd733a84b1f43292c63897423277bb7f4313a9 # v8
+        with:
+          version: v2.13.2
+          args: --timeout=5m --disable gosec --disable prealloc --output.checkstyle.path=golangci-lint-report.xml --output.text.path=stdout
+
+      - name: Upload golangci-lint report
+        if: always()
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        with:
+          name: golangci-lint-report
+          path: golangci-lint-report.xml
+          if-no-files-found: error
+          retention-days: 1
+
+  test-aerospike-native-ops:
+    name: test aerospike native-ops (fork image)
+    # Runs the aerospike store suite against the BSV fork of aerospike-server
+    # with aerospike_use_native_teranode_ops enabled, asserting the startup
+    # capability probe actually engages the native operate-path
+    # (AEROSPIKE_EXPECT_NATIVE_OPS=true fails the store tests if it does not).
+    # Gated on the AEROSPIKE_NATIVE_OPS_IMAGE repository variable so the job
+    # is inert until the fork image is published to a registry CI can reach.
+    if: vars.AEROSPIKE_NATIVE_OPS_IMAGE != ''
+    runs-on: bsva-aws-arm64-8
+    permissions:
+      contents: read
+      packages: read
+    # Source sets this workflow-wide.
+    env:
+      TESTCONTAINERS_RYUK_DISABLED: "true"
+    steps:
+      - name: Runner
+        run: |
+          echo "arch: $(uname -m), cpus: $(nproc)"
+          t=$(curl -sf --max-time 2 -X PUT http://169.254.169.254/latest/api/token -H 'X-aws-ec2-metadata-token-ttl-seconds: 60' || true)
+          for k in instance-type instance-life-cycle; do
+            echo "$k: $(curl -sf --max-time 2 -H "X-aws-ec2-metadata-token: $t" "http://169.254.169.254/latest/meta-data/$k" || echo n/a)"
+          done
+          zstd --version || echo "zstd: not installed"
+
+      - uses: actions/checkout@08eba0b27e820071cde6df949e0beb9ba4906955 # v4
+
+      - name: Login to GitHub Container Registry
+        if: startsWith(vars.AEROSPIKE_NATIVE_OPS_IMAGE, 'ghcr.io/')
+        uses: docker/login-action@5e57cd118135c172c3672efd75eb46360885c0ef # v3
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - uses: actions/setup-go@d35c59abb061a4a6fb18e82ac0862c26744d6ab5 # v5
+        with:
+          go-version: ${{ env.GO_VERSION }}
+          cache: false
+
+      - name: Restore Go caches
+        uses: ./.github/actions/go-cache
+
+      - name: Run aerospike store suite with native ops
+        env:
+          AEROSPIKE_CONTAINER_IMAGE: ${{ vars.AEROSPIKE_NATIVE_OPS_IMAGE }}
+          AEROSPIKE_CONTAINER_PLATFORM: linux/arm64
+          AEROSPIKE_EXPECT_NATIVE_OPS: "true"
+          SETTINGS_CONTEXT: test
+        run: |
+          go test -race -tags "testtxmetacache" -count=1 -timeout=15m ./stores/utxo/aerospike/...
+
+  # ---------------------------------------------------------------------------
+  # fuzz.yaml
+  # ---------------------------------------------------------------------------
+  fuzz:
+    name: ${{ matrix.target }}
+    # Source: teranode-runner-8-core (x64), no stated x64 reason.
+    runs-on: bsva-aws-arm64-8
+    timeout-minutes: ${{ fromJSON(github.event.inputs.timeout_minutes || '45') }}
+    # Source sets these workflow-wide. FUZZTIME is the source's pull_request
+    # smoke budget; its expression gives the 5m nightly budget on a push.
+    env:
+      FUZZTIME: '20s'
+      FUZZMINIMIZETIME: '60s'
+    strategy:
+      # One target finding a crasher must not cancel the others — each is an
+      # independent parser and we want every result from a given night.
+      fail-fast: false
+      matrix:
+        include:
+          - pkg: model
+            target: FuzzNewBlockFromBytes
+          - pkg: model
+            target: FuzzReadBlockFromReader
+          - pkg: model
+            target: FuzzDiskParentSpendsMap_Parity
+          - pkg: model
+            target: FuzzDecodeSubtreeMetaBody
+          - pkg: pkg/fileformat
+            target: FuzzHeaderParsersAgree
+          - pkg: pkg/fileformat
+            target: FuzzReadHeaderFromBytes
+          - pkg: services/utxopersister
+            target: FuzzUTXOWrapperFromBytes
+          - pkg: services/legacy/peer
+            target: FuzzReadWireMessage
+          - pkg: services/legacy/peer
+            target: FuzzStreamingBlockFraming
+          - pkg: services/rpc/bsvjson
+            target: FuzzParseRPCRequest
+          - pkg: services/rpc/bsvjson
+            target: FuzzUnmarshalCmd
+          - pkg: util/lane
+            target: FuzzDecodeDiskPayload
+          - pkg: util/lane
+            target: FuzzDecodeHoleData
+          - pkg: util/lane
+            target: FuzzCheckContainersMatchesValidate
+          - pkg: util/lane
+            target: FuzzDecodeSubtreePositions
+          - pkg: util/lane
+            target: FuzzDecodeProofFile
+          - pkg: util/lane
+            target: FuzzDecodeSubtreeBitmaps
+          - pkg: util/lane/backfill
+            target: FuzzOpenManifest
+          - pkg: stores/utxo/meta
+            target: FuzzNewDataFromLaneMetaBytes
+          - pkg: stores/utxo/meta
+            target: FuzzOwnCacheBytesView
+    steps:
+      - name: Runner
+        run: |
+          echo "arch: $(uname -m), cpus: $(nproc)"
+          t=$(curl -sf --max-time 2 -X PUT http://169.254.169.254/latest/api/token -H 'X-aws-ec2-metadata-token-ttl-seconds: 60' || true)
+          for k in instance-type instance-life-cycle; do
+            echo "$k: $(curl -sf --max-time 2 -H "X-aws-ec2-metadata-token: $t" "http://169.254.169.254/latest/meta-data/$k" || echo n/a)"
+          done
+          zstd --version || echo "zstd: not installed"
+
+      # Nothing otherwise relates timeout_minutes to fuzztime, and a job killed
+      # by timeout-minutes is cancelled mid-fuzz - so a deep run with a too-small
+      # timeout burns the whole budget and reports nothing. Catch it in seconds.
+      - name: Check the timeout can accommodate the fuzz budget
+        shell: bash
+        env:
+          TIMEOUT_MINUTES: ${{ github.event.inputs.timeout_minutes || '45' }}
+        run: |
+          # -fuzztime also accepts an execution count (e.g. 10000x), which has no
+          # wall-clock meaning, so there is nothing to check in that case.
+          if [[ "$FUZZTIME" =~ ^[0-9]+x$ ]]; then
+            echo "fuzztime=$FUZZTIME is an execution count; skipping the time check."
+            exit 0
+          fi
+
+          # Parse a Go duration (5m, 90s, 2h, 1h30m) into seconds. Alternatives
+          # are longest-first so that 'ms' is not matched as 'm'.
+          rest="$FUZZTIME"
+          secs=0
+          while [[ -n "$rest" ]]; do
+            if [[ "$rest" =~ ^([0-9]+(\.[0-9]+)?)(ms|us|ns|h|m|s)(.*)$ ]]; then
+              n="${BASH_REMATCH[1]}"
+              u="${BASH_REMATCH[3]}"
+              rest="${BASH_REMATCH[4]}"
+              case "$u" in
+                h) secs=$(awk "BEGIN{print $secs + $n*3600}") ;;
+                m) secs=$(awk "BEGIN{print $secs + $n*60}") ;;
+                s) secs=$(awk "BEGIN{print $secs + $n}") ;;
+                *) ;; # sub-second units are noise at this scale
+              esac
+            else
+              echo "::error::could not parse fuzztime '$FUZZTIME' as a Go duration"
+              exit 1
+            fi
+          done
+
+          # Headroom for checkout, toolchain setup, compilation, and up to
+          # FUZZMINIMIZETIME of crash minimization after a hit.
+          headroom=600
+          need=$(awk "BEGIN{printf \"%d\", $secs + $headroom}")
+          have=$(( TIMEOUT_MINUTES * 60 ))
+
+          if (( have < need )); then
+            echo "::error::timeout_minutes=$TIMEOUT_MINUTES (${have}s) is too small for fuzztime=$FUZZTIME ($(awk "BEGIN{printf \"%d\", $secs}")s) plus ${headroom}s of build and minimization headroom. Re-run with timeout_minutes >= $(( (need + 59) / 60 ))."
+            exit 1
+          fi
+
+          echo "fuzztime=$FUZZTIME fits within timeout_minutes=$TIMEOUT_MINUTES (need ${need}s, have ${have}s)."
+
+      - name: Checkout code
+        uses: actions/checkout@08eba0b27e820071cde6df949e0beb9ba4906955 # v4
+
+      - name: Set up Go
+        uses: actions/setup-go@d35c59abb061a4a6fb18e82ac0862c26744d6ab5 # v5
+        with:
+          go-version: ${{ env.GO_VERSION }}
+          cache: 'false'
+
+      # No -race here (it costs ~10x the exec rate, and exec rate is the whole
+      # point), so the build cache would be near-useless — module cache only.
+      - name: Restore Go caches
+        uses: ./.github/actions/go-cache
+        with:
+          build_cache: 'false'
+
+      - name: Locate fuzz corpus directory
+        shell: bash
+        run: |
+          corpus="$(go env GOCACHE)/fuzz/github.com/bsv-blockchain/teranode/${{ matrix.pkg }}/${{ matrix.target }}"
+          mkdir -p "$corpus"
+          echo "FUZZ_CORPUS=$corpus" >> "$GITHUB_ENV"
+
+          # Key the cache on package AND target. Target names are unique across
+          # packages today, but nothing enforces that, and two packages that
+          # each grew a FuzzParse... would silently share one corpus.
+          echo "FUZZ_CACHE_ID=$(echo '${{ matrix.pkg }}-${{ matrix.target }}' | tr '/' '-')" >> "$GITHUB_ENV"
+
+      # Restores main's corpus. The source's "Save fuzz corpus" step is not
+      # copied: from this branch it would only write cache entries nothing
+      # else can read.
+      - name: Restore fuzz corpus
+        uses: actions/cache/restore@0057852bfaa89a56745cba8c7296529d2fc39830 # v4
+        with:
+          path: ${{ env.FUZZ_CORPUS }}
+          key: fuzz-corpus-${{ env.FUZZ_CACHE_ID }}-${{ github.run_id }}
+          restore-keys: |
+            fuzz-corpus-${{ env.FUZZ_CACHE_ID }}-
+
+      - name: Fuzz ${{ matrix.target }}
+        shell: bash
+        run: |
+          set -o pipefail
+          go test -run='^$' -fuzz='^${{ matrix.target }}$' \
+            -fuzztime="${FUZZTIME}" -fuzzminimizetime="${FUZZMINIMIZETIME}" \
+            ./${{ matrix.pkg }}/ 2>&1 | tee fuzz-${{ matrix.target }}.log
+
+      - name: Upload crashers and log
+        if: failure() || cancelled()
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        with:
+          name: fuzz-crashers-${{ matrix.target }}
+          path: |
+            ${{ matrix.pkg }}/testdata/fuzz/
+            fuzz-${{ matrix.target }}.log
+          if-no-files-found: warn
+          retention-days: 30
+
+  # ---------------------------------------------------------------------------
+  # teranode_main_tests.yaml, sonarqube job: build and analysis steps only
+  # ---------------------------------------------------------------------------
+  sonarqube:
+    name: Sonarqube
+    # Source: teranode-runner-8-core (x64), no stated x64 reason.
+    runs-on: bsva-aws-arm64-8
+    # Source: needs: go-test, for its coverage profiles. go-test is not in this
+    # workflow, so the coverage download and merge steps are not copied.
+    timeout-minutes: 15
+    # Source sets this workflow-wide.
+    env:
+      TESTCONTAINERS_RYUK_DISABLED: "true"
+    steps:
+      - name: Runner
+        run: |
+          echo "arch: $(uname -m), cpus: $(nproc)"
+          t=$(curl -sf --max-time 2 -X PUT http://169.254.169.254/latest/api/token -H 'X-aws-ec2-metadata-token-ttl-seconds: 60' || true)
+          for k in instance-type instance-life-cycle; do
+            echo "$k: $(curl -sf --max-time 2 -H "X-aws-ec2-metadata-token: $t" "http://169.254.169.254/latest/meta-data/$k" || echo n/a)"
+          done
+          zstd --version || echo "zstd: not installed"
+
+      - name: Checkout
+        uses: actions/checkout@08eba0b27e820071cde6df949e0beb9ba4906955 # v4
+        with:
+          fetch-depth: 0
+
+      - name: Run filename check script
+        run: |
+          ./scripts/check_filenames.sh
+
+      - name: Forbid %w in errors.New* format strings
+        run: ./scripts/check_error_wrap_verbs.sh
+
+      - name: Set up Go
+        uses: actions/setup-go@d35c59abb061a4a6fb18e82ac0862c26744d6ab5 # v5
+        with:
+          go-version: ${{ env.GO_VERSION }}
+          cache: "false"
+
+      # golangci typechecks (no -race) and Sonar reads prebuilt reports, so
+      # restore the module cache only.
+      - name: Restore Go caches
+        uses: ./.github/actions/go-cache
+        with:
+          build_cache: 'false'
+
+      # Re-run golangci-lint separately without exiting on errors and generating a report for use in Sonar
+      - name: golangci-lint
+        uses: golangci/golangci-lint-action@4afd733a84b1f43292c63897423277bb7f4313a9 # v8
+        with:
+          version: latest
+          args: --timeout=5m --disable gosec --disable prealloc --issues-exit-code=0 --output.checkstyle.path=golangci-lint-report.xml
+
+      # No upload: no SONAR_TOKEN, and sonar.scanner.skip makes the scanner CLI
+      # exit right after it starts, before it contacts any server. This only
+      # proves the action installs and starts the scanner on arm64; the
+      # analysis itself is not run.
+      - name: SonarQube Scan (install and start only)
+        uses: SonarSource/sonarqube-scan-action@fd88b7d7ccbaefd23d8f36f73b59db7a3d246602 # v6
+        with:
+          args: -Dsonar.scanner.skip=true

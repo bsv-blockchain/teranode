@@ -1,7 +1,7 @@
 name: AWS runner trial tests
 
 # Trial only: runs two jobs from teranode_pr_tests.yaml on the self-hosted AWS
-# spot runners (bsva-infra#41), on push to this branch only. Never merged to main.
+# spot runner trial, on push to this branch only. Never merged to main.
 # Differences from the source jobs: runs-on, and the Docker Hub login runs
 # unconditionally (its PR-only if: is always false on a push event).
 
