@@ -95,7 +95,15 @@ func (l *forkLostDelta) holdBy(cancel context.CancelFunc) context.CancelFunc {
 // It runs in the background: a reorg that takes e before it finishes does not wait for it.
 func (stp *SubtreeProcessor) runForkLostDelta(e *forkPrepared) {
 	l := e.lost
+
 	defer close(l.done)
+
+	// the reorg reads the lost block itself when the probe fails: say why, for a slow fork reorg
+	defer func() {
+		if l.err != nil {
+			stp.logger.Debugf("[PrepareBlock][%s] not precomputing the lost block's delta: %v", e.blocks[0].String(), l.err)
+		}
+	}()
 
 	if stp.blockchainClient == nil {
 		l.err = errors.NewProcessingError("no blockchain client to read the tip with")
@@ -109,10 +117,10 @@ func (stp *SubtreeProcessor) runForkLostDelta(e *forkPrepared) {
 	}
 
 	l.err = stp.probeLostAgainstFirst(l.ctx, e, lost)
-	if l.err != nil {
-		stp.logger.Debugf("[PrepareBlock][%s] not precomputing the lost block's delta: %v", e.blocks[0].String(), l.err)
-	}
 }
+
+// forkLostNodeBytes is what a node of the lost block costs as D1: its hash and its position.
+const forkLostNodeBytes = 32 + 3*8
 
 // probeLostAgainstFirst computes the lost block's delta against e's set once the memory gate passes, and
 // keeps it only if the tip is still the lost block when it finishes.
@@ -120,10 +128,9 @@ func (stp *SubtreeProcessor) probeLostAgainstFirst(ctx context.Context, e *forkP
 	l := e.lost
 
 	// worst case: every node of the lost block is D1 (a node with its position), and every hash of the
-	// competitor is D2
-	const nodeBytes = 32 + 3*8
-
-	if !stp.forkSetFits(lost.TransactionCount*nodeBytes + e.txCount*32) {
+	// competitor is D2. D1 is charged twice: computeReorgDelta holds the per-subtree slices, with the spare
+	// capacity of their appends, while it allocates the combined one.
+	if !stp.forkSetFits(2*lost.TransactionCount*forkLostNodeBytes + e.txCount*32) {
 		return errors.NewProcessingError("not enough memory to keep the lost block's delta")
 	}
 

@@ -1,8 +1,11 @@
 diff --git a/services/blockassembly/subtreeprocessor/move_back_held_children.go b/services/blockassembly/subtreeprocessor/move_back_held_children.go
-index f7ff95df3..1a17db110 100644
+index a444196c5..9f002f531 100644
 --- a/services/blockassembly/subtreeprocessor/move_back_held_children.go
 +++ b/services/blockassembly/subtreeprocessor/move_back_held_children.go
-@@ -82,7 +82,7 @@ func (h *heldChildren) release(dst []subtreepkg.Node, hash chainhash.Hash) []sub
+@@ -101,13 +101,13 @@ func (h *heldChildren) release(dst []subtreepkg.Node, hash chainhash.Hash) []sub
+ 	delete(h.waiting, hash)
+ 
+ 	// Each queue entry is one parent of that node that has been emitted.
  	for i := 0; i < len(queue); i++ {
  		idx := queue[i]
  
@@ -10,4 +13,7 @@ index f7ff95df3..1a17db110 100644
 +		if h.remaining[idx]--; false {
  			continue
  		}
+ 
+ 		dst = append(dst, h.nodes[idx])
+ 		h.unreleased--
  

@@ -6,6 +6,8 @@ import (
 	"math/rand"
 	"runtime"
 	"slices"
+	"strings"
+	"sync"
 	"sync/atomic"
 	"testing"
 	"time"
@@ -16,6 +18,7 @@ import (
 	"github.com/bsv-blockchain/teranode/model"
 	"github.com/bsv-blockchain/teranode/pkg/fileformat"
 	"github.com/bsv-blockchain/teranode/services/blockchain"
+	"github.com/bsv-blockchain/teranode/ulogger"
 	"github.com/stretchr/testify/mock"
 	"github.com/stretchr/testify/require"
 )
@@ -361,6 +364,80 @@ func TestForkLostDelta_NotProbedWhenTheMemoryGateFails(t *testing.T) {
 	waitLostDelta(t, competitor.lost)
 	require.False(t, competitor.lost.ready())
 	require.Nil(t, competitor.lostDelta(f.block, competitor.txMap, 2))
+}
+
+// The gate charges the probe's peak, not its kept result: computeReorgDelta holds the per-subtree D1 slices
+// and the combined one at once, so a room for the kept delta alone is not enough.
+func TestReorgScenario_ForkLostDeltaMemoryGateChargesThePeakOfTheDelta(t *testing.T) {
+	f := newForkFixture(t)
+	lost := f.child(t, model.GenesisBlockHeader.Hash())
+	f.serveTip(lost)
+
+	// the budget holds the delta once and not twice
+	kept := lost.TransactionCount*forkLostNodeBytes + 8*32 + f.stp.TxCount()*fastPathBytesPerPending
+
+	old := reorgMemoryStats
+	reorgMemoryStats = func() (uint64, int64) { return 0, int64(kept/3*4 + 8) }
+
+	defer func() { reorgMemoryStats = old }()
+
+	f.stp.PrepareBlock(f.block)
+
+	competitor := waitForkDone(t, f.stp, 1)[0]
+	require.NoError(t, competitor.err)
+	waitLostDelta(t, competitor.lost)
+	require.False(t, competitor.lost.ready())
+	require.ErrorContains(t, competitor.lost.err, "not enough memory")
+}
+
+// debugLogger records Debugf lines; everything else is dropped as by TestLogger.
+type debugLogger struct {
+	ulogger.TestLogger
+
+	mu    sync.Mutex
+	lines []string
+}
+
+func (l *debugLogger) Debugf(format string, args ...interface{}) {
+	l.mu.Lock()
+	defer l.mu.Unlock()
+
+	l.lines = append(l.lines, fmt.Sprintf(format, args...))
+}
+
+func (l *debugLogger) recorded() []string {
+	l.mu.Lock()
+	defer l.mu.Unlock()
+
+	return append([]string(nil), l.lines...)
+}
+
+// Whichever way the probe ends without a delta, it says why: the reorg then reads the lost block, which
+// is the slowdown an operator looks into.
+func TestForkLostDelta_LogsWhyItDidNotProbe(t *testing.T) {
+	tests := map[string]struct {
+		setup func(f *forkFixture)
+		want  string
+	}{
+		"the tip cannot be read": {setup: func(f *forkFixture) { f.serveTip(nil) }, want: "cannot read the tip"},
+		"no blockchain client":   {setup: func(f *forkFixture) { f.stp.blockchainClient = nil }, want: "no blockchain client"},
+	}
+
+	for name, tc := range tests {
+		t.Run(name, func(t *testing.T) {
+			f := newForkFixture(t)
+			logger := &debugLogger{}
+			f.stp.logger = logger
+			tc.setup(f)
+
+			f.stp.PrepareBlock(f.block)
+
+			competitor := waitForkDone(t, f.stp, 1)[0]
+			waitLostDelta(t, competitor.lost)
+			require.Error(t, competitor.lost.err)
+			require.Contains(t, strings.Join(logger.recorded(), "\n"), tc.want)
+		})
+	}
 }
 
 // A hash of the first winner that the union lacks cannot happen with sets built from the same blocks, so

@@ -1,8 +1,11 @@
 diff --git a/services/blockassembly/subtreeprocessor/SubtreeProcessor.go b/services/blockassembly/subtreeprocessor/SubtreeProcessor.go
-index 6396edc30..0e6107949 100644
+index b5c52c03f..e6df538cc 100644
 --- a/services/blockassembly/subtreeprocessor/SubtreeProcessor.go
 +++ b/services/blockassembly/subtreeprocessor/SubtreeProcessor.go
-@@ -4485,7 +4485,7 @@ func awaitStoreResults(ctx context.Context, caller string, results []chan StoreR
+@@ -4773,13 +4773,13 @@ func awaitStoreResults(ctx context.Context, caller string, results []chan StoreR
+ 
+ 	for i, result := range results {
+ 		select {
  		case r := <-result:
  			switch {
  			case r.Err != nil:
@@ -11,3 +14,6 @@ index 6396edc30..0e6107949 100644
  			case r.Cancelled || !r.SubtreeStored:
  				return errors.NewStorageError("[%s] subtree %d was not stored (cancelled %t)", caller, i, r.Cancelled)
  			}
+ 		case <-timer.C:
+ 			return errors.NewStorageError("[%s] subtree %d did not finish storing within %s", caller, i, deadline)
+ 		case <-ctx.Done():

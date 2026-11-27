@@ -1,8 +1,10 @@
 package subtreeprocessor
 
 import (
+	"bytes"
 	"context"
 	"fmt"
+	"io"
 	"runtime"
 	"sync/atomic"
 	"testing"
@@ -241,19 +243,28 @@ func TestPrepareForkBlock_TakenByHashAndSubtreeList(t *testing.T) {
 	require.Empty(t, forkEntries(f.stp))
 }
 
-// A set that is still being built is not waited for: a reorg takes the rebuild at full width.
-func TestPrepareForkBlock_UnfinishedSetIsNotWaitedFor(t *testing.T) {
+// A set that is still being built is not used: a reorg takes the rebuild at full width. Its build is
+// cancelled and has ended when the reorg goes on, so its partial set is not alive beside the rebuild's.
+func TestPrepareForkBlock_UnfinishedSetIsCancelledAndItsBuildEnded(t *testing.T) {
 	f := newForkFixture(t)
 
 	f.gated.hold()
 	defer f.gated.release()
 
 	f.stp.PrepareBlock(f.block)
-	require.Len(t, forkEntries(f.stp), 1)
+
+	entries := forkEntries(f.stp)
+	require.Len(t, entries, 1)
 
 	_, _, ok := f.stp.takePreparedForkSet([]*model.Block{f.block})
 	require.False(t, ok)
 	require.Empty(t, forkEntries(f.stp))
+
+	select {
+	case <-entries[0].done:
+	default:
+		require.FailNow(t, "the build of the unfinished set was still running when the reorg went on")
+	}
 }
 
 // The sets belong to the tip they were prepared against: when the tip moves they are let go, whether
@@ -380,6 +391,28 @@ func TestPrepareForkBlock_ToCheckSubtreeWithChangedLeafIsRejected(t *testing.T) 
 	f.stp.PrepareBlock(f.block)
 	entries := waitForkDone(t, f.stp, 1)
 	require.NoError(t, entries[0].err)
+}
+
+// The check recomputes the root from the leaves and also holds the header's root to the key: a body
+// whose leaves hash to the key under another root at its head is not a body of that key.
+func TestVerifyToCheckSubtree_HeaderRootMustBeTheKey(t *testing.T) {
+	f := newForkFixture(t)
+	ctx := context.Background()
+
+	key := f.subtrees[1].RootHash().CloneBytes()
+	body, err := f.store.Get(ctx, key, fileformat.FileTypeSubtree)
+	require.NoError(t, err)
+
+	hash := *f.subtrees[1].RootHash()
+
+	reader, err := verifyToCheckSubtree(io.NopCloser(bytes.NewReader(body)), hash, 1<<20)
+	require.NoError(t, err)
+	require.NoError(t, reader.Close())
+
+	body[0] ^= 0xff // the root at the head of the file
+
+	_, err = verifyToCheckSubtree(io.NopCloser(bytes.NewReader(body)), hash, 1<<20)
+	require.Error(t, err)
 }
 
 // The child's gate counts the competitor's set as freed, since the union is built from the store and the

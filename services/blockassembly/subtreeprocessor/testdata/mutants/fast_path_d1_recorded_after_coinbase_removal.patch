@@ -1,8 +1,11 @@
 diff --git a/services/blockassembly/subtreeprocessor/reorg_fast_path.go b/services/blockassembly/subtreeprocessor/reorg_fast_path.go
-index 1a3dc0855..99fe168f3 100644
+index c5d9aaf43..530025357 100644
 --- a/services/blockassembly/subtreeprocessor/reorg_fast_path.go
 +++ b/services/blockassembly/subtreeprocessor/reorg_fast_path.go
-@@ -443,8 +443,6 @@ func (stp *SubtreeProcessor) applyFastReorg(ctx context.Context, plan *fastReorg
+@@ -451,14 +451,12 @@ func (stp *SubtreeProcessor) applyFastReorg(ctx context.Context, plan *fastReorg
+ 	// failure path, and by the reset that read it.
+ 	d1Hashes := make([]chainhash.Hash, len(plan.d1Nodes))
+ 	for i := range plan.d1Nodes {
  		d1Hashes[i] = plan.d1Nodes[i].Hash
  	}
  
@@ -11,7 +14,13 @@ index 1a3dc0855..99fe168f3 100644
  	txMapLength := stp.currentTxMap.Length()
  
  	if err = stp.removeCoinbaseUtxos(ctx, lost); err != nil && !errors.Is(err, errors.ErrTxNotFound) {
-@@ -463,6 +461,8 @@ func (stp *SubtreeProcessor) applyFastReorg(ctx context.Context, plan *fastReorg
+ 		return nil, errors.NewProcessingError("[reorgInPlace][%s] error removing coinbase utxo", lost.String(), err)
+ 	}
+ 
+@@ -471,12 +469,14 @@ func (stp *SubtreeProcessor) applyFastReorg(ctx context.Context, plan *fastReorg
+ 
+ 	if err = stp.blockchainClient.SetBlockProcessedAt(ctx, lost.Header.Hash(), true); err != nil {
+ 		// not critical, as in the move-back
  		stp.logger.Errorf("[reorgInPlace][%s] error clearing block processed_at timestamp: %v", lost.String(), err)
  	}
  
@@ -20,3 +29,6 @@ index 1a3dc0855..99fe168f3 100644
  	stp.phases.done("fast_remove_coinbase")
  	stp.reportProgressUnlessDone(ctx)
  
+ 	// Effective D1 goes into the map before the subtrees are built and sent: the meta of a subtree
+ 	// that holds one reads its inpoints from the map.
+ 	// At utxostore_laneMigration shadow each goes in with the lane position the UTXO store holds for it,

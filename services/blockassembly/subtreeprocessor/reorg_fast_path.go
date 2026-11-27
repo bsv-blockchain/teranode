@@ -174,7 +174,8 @@ func (stp *SubtreeProcessor) planFastReorg(ctx context.Context, moveBackBlocks, 
 	// the same: the live figure is the heap the last GC found, which need not include a set built since.
 	prepared := stp.takePreparedFork(moveForwardBlocks)
 
-	var setBytes uint64
+	// The lost block is charged like a winner: D1 and its subtrees' nodes and inpoints grow with it.
+	setBytes := lost.TransactionCount * fastPathSetBytesPerHash
 
 	for _, block := range moveForwardBlocks {
 		setBytes += block.TransactionCount * fastPathSetBytesPerHash
