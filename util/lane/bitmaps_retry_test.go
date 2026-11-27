@@ -94,6 +94,24 @@ func TestBitmapsWriteRetryDo(t *testing.T) {
 	}
 }
 
+// No attempt starts once the bound has run out: a backoff clamped to the time left ends the retry
+// instead of starting a last attempt at the bound.
+func TestBitmapsWriteRetryStartsNoAttemptAfterTheBound(t *testing.T) {
+	const service = "test-no-attempt-after-bound"
+
+	_, exhaustedBefore := retryCounts(service)
+
+	write, calls := failingWrite(-1, errors.NewStorageError("store down"))
+
+	// attempts at 0 and 600ms; the next backoff would end past the 1s bound, so it is the last
+	r := &BitmapsWriteRetry{Bound: time.Second, FirstBackoff: 600 * time.Millisecond, MaxBackoff: 600 * time.Millisecond}
+	require.Error(t, r.Do(t.Context(), service, write))
+	require.Equal(t, int32(2), calls.Load())
+
+	_, exhausted := retryCounts(service)
+	require.Equal(t, exhaustedBefore+1, exhausted)
+}
+
 // A context that ends during the backoff stops the retry at once, and a write that fails with the
 // context already ended is not retried; neither counts as exhausted.
 func TestBitmapsWriteRetryStopsWithItsContext(t *testing.T) {

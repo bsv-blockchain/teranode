@@ -130,6 +130,13 @@ func (r *BitmapsWriteRetry) Do(ctx context.Context, service string, write func()
 			return errors.NewContextCanceledError("stopped retrying the lane bitmaps write", err)
 		}
 
+		// a sleep clamped to the bound, or one that woke late, ends at or past it
+		if time.Until(deadline) <= 0 {
+			countBitmapsWriteRetriesExhausted(service)
+
+			return errors.NewStorageError("still failing when the lane bitmaps write retry bound of %s ran out", r.bound(), err)
+		}
+
 		if !retried {
 			retried = true
 

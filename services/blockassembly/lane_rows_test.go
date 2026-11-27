@@ -772,12 +772,18 @@ type failingBitmapsWriteStore struct {
 
 	failures int
 	err      error
+	// failMeta refuses every subtree meta write too.
+	failMeta bool
 
 	mu      sync.Mutex
 	refused int
 }
 
 func (s *failingBitmapsWriteStore) Set(ctx context.Context, key []byte, fileType fileformat.FileType, value []byte, opts ...blobOptions.FileOption) error {
+	if s.failMeta && fileType == fileformat.FileTypeSubtreeMeta {
+		return errors.NewStorageError("meta write refused")
+	}
+
 	if fileType == fileformat.FileTypeSubtreeLaneBitmaps {
 		s.mu.Lock()
 		refuse := s.failures < 0 || s.refused < s.failures
@@ -874,6 +880,41 @@ func TestStoreSubtreeDataRetriesAFailedLaneBitmapsWrite(t *testing.T) {
 			require.Zero(t, missing, "its bitmaps are still kept")
 		})
 	}
+}
+
+// TestAQueuedSubtreeRetryWaitsForTheLaneBitmapsWrite: a subtree whose meta write fails while its lane
+// bitmaps write is retrying goes to the retry processor, which also stores the subtree file, only
+// once the lane bitmaps file is written.
+func TestAQueuedSubtreeRetryWaitsForTheLaneBitmapsWrite(t *testing.T) {
+	server, memoryStore := setupServerWithSettings(t, func(s *settings.Settings) {
+		s.UtxoStore.LaneMigration = settings.LaneMigrationShadow
+		s.BlockAssembly.StoreTxInpointsForSubtreeMeta = true
+	})
+	server.laneBitmapsRetry.Bound = 5 * time.Second
+	server.laneBitmapsRetry.FirstBackoff = 100 * time.Millisecond
+	server.laneBitmapsRetry.MaxBackoff = 100 * time.Millisecond
+
+	server.subtreeStore = &failingBitmapsWriteStore{Store: memoryStore, failures: 2, failMeta: true}
+
+	st, txMap := laneSealSubtree(t, "queued-retry")
+	keepSealed(server, st, txMap)
+
+	retries := make(chan *subtreeRetrySend, 10)
+
+	subtreeDone, allDone, err := server.storeSubtreeData(t.Context(), subtreeprocessor.NewSubtreeRequest{Subtree: st, ParentTxMap: txMap}, retries)
+	require.NoError(t, err)
+
+	select {
+	case <-retries:
+		exists, err := memoryStore.Exists(t.Context(), st.RootHash()[:], fileformat.FileTypeSubtreeLaneBitmaps)
+		require.NoError(t, err)
+		require.True(t, exists, "the lane bitmaps file was written before the retry was queued")
+	case <-time.After(10 * time.Second):
+		t.Fatal("the failed meta write was never queued for a retry")
+	}
+
+	require.True(t, <-subtreeDone)
+	<-allDone
 }
 
 // refreshDuringRetryStore refuses a lane bitmaps file write at delete-at height 300 until a refresh

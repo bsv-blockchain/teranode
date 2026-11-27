@@ -1105,6 +1105,11 @@ func (ba *BlockAssembly) storeSubtreeData(ctx context.Context, subtreeRequest su
 					ba.logger.Debugf("[BlockAssembly:storeSubtreeData][%s] subtree meta already exists", subtree.RootHash().String())
 				} else {
 					ba.logger.Errorf("[BlockAssembly:storeSubtreeData][%s] failed to store subtree meta: %s", subtree.RootHash().String(), err)
+
+					// the retry also stores the subtree file, so it is queued only once the lane
+					// bitmaps write, which may be retrying through the same outage, has ended
+					<-laneBitmapsDone
+
 					subtreeRetryChan <- &subtreeRetrySend{
 						subtreeHash:      *subtree.RootHash(),
 						subtreeBytes:     subtreeBytes,

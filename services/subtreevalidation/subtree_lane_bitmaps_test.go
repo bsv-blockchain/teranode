@@ -57,6 +57,9 @@ type recordingStore struct {
 	refuseBitmaps  int
 	refuseErr      error
 	bitmapsRefused int
+	// metaAfterBitmaps, when set, holds a refused meta write until the first lane bitmaps write
+	// has been refused, and is closed then.
+	metaAfterBitmaps chan struct{}
 	// slow is a file type whose write takes slowFor longer.
 	slow    fileformat.FileType
 	slowFor time.Duration
@@ -70,6 +73,10 @@ type recordedWrite struct {
 // Set records each write once it has completed, in the order writes complete.
 func (s *recordingStore) Set(ctx context.Context, key []byte, fileType fileformat.FileType, value []byte, opts ...bloboptions.FileOption) error {
 	if fileType == s.refuse {
+		if s.metaAfterBitmaps != nil {
+			<-s.metaAfterBitmaps
+		}
+
 		return errors.NewStorageError("refused for the test")
 	}
 
@@ -78,6 +85,10 @@ func (s *recordingStore) Set(ctx context.Context, key []byte, fileType fileforma
 		refuse := s.refuseBitmaps < 0 || s.bitmapsRefused < s.refuseBitmaps
 		if refuse {
 			s.bitmapsRefused++
+
+			if s.bitmapsRefused == 1 && s.metaAfterBitmaps != nil {
+				close(s.metaAfterBitmaps)
+			}
 		}
 		s.mu.Unlock()
 
@@ -655,7 +666,8 @@ func TestStoreSubtreeFiles_AFailedMetaWriteStopsTheBitmapsRetry(t *testing.T) {
 	st, m := laneBitmapsSubtree(t)
 	root := st.RootHash()
 
-	store := &recordingStore{Store: blobmemory.New(), refuse: fileformat.FileTypeSubtreeMeta, refuseBitmaps: -1}
+	// the meta write fails only once the bitmaps write has failed, so the retry is under way
+	store := &recordingStore{Store: blobmemory.New(), refuse: fileformat.FileTypeSubtreeMeta, refuseBitmaps: -1, metaAfterBitmaps: make(chan struct{})}
 
 	utxoStore := &utxo.MockUtxostore{}
 	utxoStore.On("GetBlockHeight").Return(uint32(100)).Maybe()

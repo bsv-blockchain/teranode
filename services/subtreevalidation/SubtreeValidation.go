@@ -1285,11 +1285,8 @@ const laneBitmapsService = "subtreevalidation"
 // its database is briefly unavailable is retried (laneBitmapsRetry). At shadow nothing acts on
 // lanes, so a write that still fails does not stop the subtree: it is logged and counted as
 // write_failed, and the block that lists the subtree counts its bitmaps as absent and goes without
-// rows. A file already there, from an earlier validation of the same subtree, is kept.
-//
-// Each attempt is a plain write, as the meta and subtree writes are, so the file gets this
-// validation's expiry as its subtree file then does, even when a second validation of the same
-// subtree wrote both while this one was in its backoff.
+// rows. A file already there, from an earlier validation of the same subtree, is kept. Each attempt
+// is a plain write, as the meta and subtree writes are.
 func (u *Server) storeSubtreeLaneBitmaps(ctx context.Context, subtreeHash *chainhash.Hash, bitmaps lane.SubtreeBitmaps, dah uint32) {
 	data, err := lane.EncodeSubtreeBitmaps(bitmaps)
 	if err == nil {
