@@ -329,6 +329,9 @@ func NewSettings(alternativeContext ...string) *Settings {
 		},
 		BlockAssembly: BlockAssemblySettings{
 			LivenessStallTimeout:                 getDuration("blockassembly_livenessStallTimeout", 0, alternativeContext...),
+			ReorgStoreDeadline:                   getDuration("blockassembly_reorgStoreDeadline", 0, alternativeContext...),
+			StoreQueueMaxMB:                      getInt("blockassembly_storeQueueMaxMB", 4096, alternativeContext...),
+			StoredPrefixTemplate:                 getBool("blockassembly_storedPrefixTemplate", false, alternativeContext...),
 			ReconcileInterval:                    getDuration("blockassembly_reconcileInterval", 30*time.Second, alternativeContext...),
 			Disabled:                             getBool("blockassembly_disabled", false, alternativeContext...),
 			GenerateTipWaitTimeout:               getDuration("blockassembly_generateTipWaitTimeout", DefaultGenerateTipWaitTimeout, alternativeContext...),
@@ -349,6 +352,8 @@ func NewSettings(alternativeContext ...string) *Settings {
 			NewSubtreeChanBuffer:                 getInt("blockassembly_newSubtreeChanBuffer", 1_000, alternativeContext...),
 			SubtreeRetryChanBuffer:               getInt("blockassembly_subtreeRetryChanBuffer", 1_000, alternativeContext...),
 			SubtreeStorageWorkers:                getInt("blockassembly_subtreeStorageWorkers", 4, alternativeContext...),
+			SubtreeStorageMetaWorkers:            getInt("blockassembly_subtreeStorageMetaWorkers", 0, alternativeContext...),
+			SubtreeStorageWriters:                getInt("blockassembly_subtreeStorageWriters", 0, alternativeContext...),
 			SubmitMiningSolutionWaitForResponse:  getBool("blockassembly_SubmitMiningSolution_waitForResponse", true, alternativeContext...),
 			InitialMerkleItemsPerSubtree:         getInt("initial_merkle_items_per_subtree", 1_048_576, alternativeContext...),
 			MinimumMerkleItemsPerSubtree:         getInt("minimum_merkle_items_per_subtree", 1024, alternativeContext...),
