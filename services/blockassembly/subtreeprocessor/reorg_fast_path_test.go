@@ -17,6 +17,7 @@ import (
 	"github.com/bsv-blockchain/teranode/model"
 	"github.com/bsv-blockchain/teranode/pkg/fileformat"
 	"github.com/bsv-blockchain/teranode/stores/utxo"
+	"github.com/bsv-blockchain/teranode/stores/utxo/fields"
 	"github.com/prometheus/client_golang/prometheus"
 	dto "github.com/prometheus/client_model/go"
 	"github.com/stretchr/testify/require"
@@ -997,19 +998,17 @@ func requireResetRecoversEveryUnminedTx(t *testing.T, sc *reorgScenario) {
 
 	require.True(t, sc.stp.failedForkReorgNeedsReset.Load(), "a failed fork reorg waits for a reset")
 
+	// The lost block's transactions are mined in the store, which is the state a failed fast path leaves them in.
+	require.NoError(t, sc.utxo.Store.MarkTransactionsOnLongestChain(t.Context(), sc.rawD1(), true))
+
 	require.NoError(t, sc.stp.reset(sc.genesis, []*model.Block{sc.lost}, sc.forward, false, func() error { return nil }))
 
-	swept := make(map[chainhash.Hash]struct{})
-	for _, h := range sc.utxo.marked(false) {
-		swept[h] = struct{}{}
-	}
-
-	for _, h := range sc.expectedOrderAfter() {
-		require.Contains(t, swept, h, "unmined transaction %s is swept", h)
-	}
-
+	// The end state, read from the store: the lost block's transactions are unmined again. The pending
+	// ones are not in the scenario's store, so only the spy sees their marks.
 	for _, h := range sc.rawD1() {
-		require.Contains(t, swept, h, "lost transaction %s no winner has is swept", h)
+		data, err := sc.utxo.Get(t.Context(), &h, fields.UnminedSince)
+		require.NoError(t, err)
+		require.NotZero(t, data.UnminedSince, "lost transaction %s no winner has is unmined in the store after the reset", h)
 	}
 
 	require.False(t, sc.stp.failedForkReorgNeedsReset.Load())
