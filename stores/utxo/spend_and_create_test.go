@@ -1668,6 +1668,7 @@ type fakeRollForwarder struct {
 	conflictingErrs     []error
 	conflictingChildren [][]chainhash.Hash
 	conflictingMarked   [][]chainhash.Hash
+	conflictEvicted     [][]chainhash.Hash
 	conflictingCtxErr   error
 	spends              []*Spend
 	spendErr            error
@@ -1806,6 +1807,12 @@ func (f *fakeRollForwarder) SetConflicting(ctx context.Context, txHashes []chain
 	f.conflictingChildren = f.conflictingChildren[1:]
 
 	return nil, children, nil
+}
+
+func (f *fakeRollForwarder) CreatingConflictEvictor() func([]chainhash.Hash) {
+	return func(hashes []chainhash.Hash) {
+		f.conflictEvicted = append(f.conflictEvicted, append([]chainhash.Hash(nil), hashes...))
+	}
 }
 
 // twoInputTx returns a tx with two (empty) inputs so AllInputsSpent has a length to match.
@@ -2024,6 +2031,7 @@ func TestRollForwardCreating(t *testing.T) {
 		_, _, err := RollForwardCreating(ctx, ulogger.TestLogger{}, f, tx, attempt, 100)
 		require.True(t, IsEndedConflicting(err))
 		require.Equal(t, [][]chainhash.Hash{{hash}, {child}, {grandchild}}, f.conflictingMarked, "each level once, and a transaction that is already marked is not marked again")
+		require.Equal(t, [][]chainhash.Hash{{hash, child, grandchild}}, f.conflictEvicted, "remote caches must evict every demoted descendant")
 	})
 
 	t.Run("a mark that stopped at a descendant is repeated from the record on the next pass", func(t *testing.T) {
@@ -2044,6 +2052,7 @@ func TestRollForwardCreating(t *testing.T) {
 		require.ErrorIs(t, err, errors.ErrStorageError)
 		require.False(t, IsEndedConflicting(err), "the record is not complete")
 		require.Equal(t, []string{"lease", "spend", "getmeta", "conflicting", "conflicting", "unlease"}, f.callSeq)
+		require.Equal(t, [][]chainhash.Hash{{hash, child}}, f.conflictEvicted, "a partial mark must evict hashes before returning its error")
 
 		// The store wrote the flag of the record before the walk failed.
 		f.existing.Conflicting = true

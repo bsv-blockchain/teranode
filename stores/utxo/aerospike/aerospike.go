@@ -204,6 +204,7 @@ func safeBatcherPutBatchCtx[T any](b batcherIfc[T], ctx context.Context, items [
 // It is thread-safe for concurrent access.
 type Store struct {
 	utxo.LanePositions
+	creatingConflictEvictor func([]chainhash.Hash)
 
 	// laneSlotWrites is whether the server records a spend's lane position in the parent's slot,
 	// which the start-up probe checks with lane positions on. It only decides how spends are
@@ -323,6 +324,17 @@ type Store struct {
 	// result before giving up, so a wedged dispatch fn can never park a caller
 	// for the life of the process. Computed once from the batch policy.
 	batcherWait time.Duration
+}
+
+// SetCreatingConflictEvictor registers publication of txmeta DELETEs for records
+// demoted by create-first recovery. Set this before the store serves requests.
+func (s *Store) SetCreatingConflictEvictor(evict func([]chainhash.Hash)) {
+	s.creatingConflictEvictor = evict
+}
+
+// CreatingConflictEvictor returns the callback installed by the store owner.
+func (s *Store) CreatingConflictEvictor() func([]chainhash.Hash) {
+	return s.creatingConflictEvictor
 }
 
 // batchOperate runs a batch through the underlying Aerospike client, honouring

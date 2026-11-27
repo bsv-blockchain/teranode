@@ -37,6 +37,15 @@ type Store struct {
 	store  utxo.Store
 }
 
+// CreatingConflictEvictor forwards recovery eviction through the logging wrapper.
+func (s *Store) CreatingConflictEvictor() func([]chainhash.Hash) {
+	if publisher, ok := utxo.As[utxo.CreatingConflictEvictorProvider](s.store); ok {
+		return publisher.CreatingConflictEvictor()
+	}
+
+	return nil
+}
+
 // Callers that check the store for an optional method, such as the pruner
 // service looking for a pruner, use utxo.As, which looks through the wrapper by
 // way of Unwrap. Without it, turning logging on would hide those methods.

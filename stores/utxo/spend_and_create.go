@@ -1858,6 +1858,12 @@ type creatingFinisher interface {
 	ReleaseSpendLease(ctx context.Context, hash *chainhash.Hash, attempt, lease []byte) error
 }
 
+// CreatingConflictEvictorProvider supplies the remote txmeta eviction callback for a
+// create-first recovery that marks a record and its descendants conflicting.
+type CreatingConflictEvictorProvider interface {
+	CreatingConflictEvictor() func([]chainhash.Hash)
+}
+
 // rollForwardCreating is the single definition of the roll-forward rule; spend is the re-spend of
 // the caller's store. completed is true when this call spent and finalized the record, and false,
 // with a nil error, when the record was already final and the call did nothing.
@@ -2013,7 +2019,12 @@ func markConflictingDetached(ctx context.Context, s creatingFinisher, hash *chai
 	mCtx, cancel := rollbackContext(ctx, s)
 	defer cancel()
 
-	_, _, err := MarkConflictingRecursively(mCtx, s, []chainhash.Hash{*hash})
+	_, marked, err := MarkConflictingRecursively(mCtx, s, []chainhash.Hash{*hash})
+	if publisher, ok := s.(CreatingConflictEvictorProvider); ok {
+		if evict := publisher.CreatingConflictEvictor(); evict != nil {
+			evict(marked)
+		}
+	}
 
 	return err
 }

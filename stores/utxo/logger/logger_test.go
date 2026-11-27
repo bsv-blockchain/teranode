@@ -35,6 +35,15 @@ type MockStore struct {
 	SupportsOutpointOnlySpendResult bool
 }
 
+type creatingConflictPublisherStore struct {
+	*MockStore
+	evicted []chainhash.Hash
+}
+
+func (s *creatingConflictPublisherStore) CreatingConflictEvictor() func([]chainhash.Hash) {
+	return func(hashes []chainhash.Hash) { s.evicted = append(s.evicted, hashes...) }
+}
+
 func (m *MockStore) SetBlockHeight(blockHeight uint32) error {
 	args := m.Called(blockHeight)
 	return args.Error(0)
@@ -1450,6 +1459,12 @@ func TestLoggerStore_CreateFirstDelegates(t *testing.T) {
 	hashes, err := store.QueryStaleCreatingTxs(ctx, 100, 0)
 	require.NoError(t, err)
 	require.Nil(t, hashes)
+
+	publisher := &creatingConflictPublisherStore{MockStore: inner}
+	wrapped := New(ctx, ulogger.TestLogger{}, publisher).(*Store)
+	want := []chainhash.Hash{{1}, {2}}
+	wrapped.CreatingConflictEvictor()(want)
+	require.Equal(t, want, publisher.evicted)
 }
 
 func TestHoldMethods_Delegate(t *testing.T) {

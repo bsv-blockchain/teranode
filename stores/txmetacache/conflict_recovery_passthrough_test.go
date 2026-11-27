@@ -8,6 +8,15 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
+type creatingConflictPublisherStore struct {
+	utxo.Store
+	evicted []chainhash.Hash
+}
+
+func (s *creatingConflictPublisherStore) CreatingConflictEvictor() func([]chainhash.Hash) {
+	return func(hashes []chainhash.Hash) { s.evicted = append(s.evicted, hashes...) }
+}
+
 // The cache forwards the conflict recovery methods to its store without touching the cache.
 func TestTxMetaCache_ForwardsConflictRecovery(t *testing.T) {
 	c := newPerHashCache(t, Unallocated)
@@ -23,4 +32,9 @@ func TestTxMetaCache_ForwardsConflictRecovery(t *testing.T) {
 	require.NoError(t, c.RestoreConflictSpends(ctx, nil, 1))
 	require.NoError(t, c.SetConflictLocks(ctx, id, []chainhash.Hash{{2}}, true))
 	require.NoError(t, c.ReleaseConflictLocks(ctx, id, []chainhash.Hash{{2}}))
+
+	inner := &creatingConflictPublisherStore{Store: c.utxoStore}
+	c.utxoStore = inner
+	c.CreatingConflictEvictor()([]chainhash.Hash{id})
+	require.Equal(t, []chainhash.Hash{id}, inner.evicted)
 }

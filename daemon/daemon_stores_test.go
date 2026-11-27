@@ -11,18 +11,69 @@ import (
 	"testing"
 	"time"
 
+	"github.com/bsv-blockchain/go-bt/v2/chainhash"
 	"github.com/bsv-blockchain/teranode/errors"
 	"github.com/bsv-blockchain/teranode/settings"
+	"github.com/bsv-blockchain/teranode/stores/txmetacache"
 	utxostore "github.com/bsv-blockchain/teranode/stores/utxo"
+	"github.com/bsv-blockchain/teranode/stores/utxo/aerospike"
 	"github.com/bsv-blockchain/teranode/stores/utxo/fields"
 	"github.com/bsv-blockchain/teranode/stores/utxo/nullstore"
 	"github.com/bsv-blockchain/teranode/stores/utxo/pebble"
 	utxosql "github.com/bsv-blockchain/teranode/stores/utxo/sql"
 	"github.com/bsv-blockchain/teranode/stores/utxo/tests"
 	"github.com/bsv-blockchain/teranode/ulogger"
+	"github.com/bsv-blockchain/teranode/util/kafka"
 	"github.com/bsv-blockchain/teranode/util/lane"
 	"github.com/stretchr/testify/require"
 )
+
+type txmetaCaptureProducer struct {
+	recordingProducer
+	starts   int
+	messages []*kafka.Message
+}
+
+func (p *txmetaCaptureProducer) Start(context.Context, chan *kafka.Message) {
+	p.starts++
+}
+
+func (p *txmetaCaptureProducer) TryPublish(message *kafka.Message) bool {
+	p.messages = append(p.messages, message)
+	return true
+}
+
+func TestGetUtxoStoreWiresCreatingConflictDeletes(t *testing.T) {
+	originalStore, originalProducer := newMainUtxoStore, getKafkaTxmetaEvictionAsyncProducer
+	t.Cleanup(func() {
+		newMainUtxoStore = originalStore
+		getKafkaTxmetaEvictionAsyncProducer = originalProducer
+	})
+
+	raw := &aerospike.Store{}
+	producer := &txmetaCaptureProducer{}
+	newMainUtxoStore = func(context.Context, ulogger.Logger, *settings.Settings) (utxostore.Store, error) {
+		return raw, nil
+	}
+	getKafkaTxmetaEvictionAsyncProducer = func(context.Context, ulogger.Logger, *settings.Settings) (kafka.KafkaAsyncProducerI, error) {
+		return producer, nil
+	}
+
+	stores := &Stores{}
+	appSettings := &settings.Settings{}
+	appSettings.UtxoStore.LaneMigration = settings.LaneMigrationOff
+	store, err := stores.GetUtxoStore(context.Background(), ulogger.TestLogger{}, appSettings)
+	require.NoError(t, err)
+	require.Same(t, raw, store)
+	require.Equal(t, 1, producer.starts)
+
+	hash := chainhash.Hash{1}
+	require.NotNil(t, raw.CreatingConflictEvictor())
+	raw.CreatingConflictEvictor()([]chainhash.Hash{hash})
+	require.Len(t, producer.messages, 1)
+	require.Equal(t, hash[:], producer.messages[0].Key)
+	require.Equal(t, txmetacache.EncodeDeleteBatch([]chainhash.Hash{hash}), producer.messages[0].Value)
+}
 
 // laneSource answers for the blockchain service: a lease on lane 9, grants of 1,000 positions.
 type laneSource struct {

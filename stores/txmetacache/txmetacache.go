@@ -107,6 +107,15 @@ type TxMetaCache struct {
 	laneShadow bool
 }
 
+// CreatingConflictEvictor forwards recovery eviction through the cache wrapper.
+func (t *TxMetaCache) CreatingConflictEvictor() func([]chainhash.Hash) {
+	if publisher, ok := utxo.As[utxo.CreatingConflictEvictorProvider](t.utxoStore); ok {
+		return publisher.CreatingConflictEvictor()
+	}
+
+	return nil
+}
+
 // CacheStats provides statistical information about the current state of the cache.
 // These statistics are useful for monitoring cache utilization and performance.
 // The metrics exposed through this struct are critical for operational monitoring,

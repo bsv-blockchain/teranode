@@ -86,15 +86,15 @@ func getKafkaTxmetaAsyncProducer(ctx context.Context, logger ulogger.Logger,
 	return kafka.NewKafkaAsyncProducerFromURL(ctx, logger, kafkaTxmetaConfig, &settings.Kafka, opts...)
 }
 
-// getKafkaTxmetaEvictionAsyncProducer creates the txmeta producer block assembly uses to
-// publish DELETEs for txs it demotes to conflicting. It returns nil, nil when no txmeta
-// topic is configured, in which case block assembly simply publishes nothing.
+// getKafkaTxmetaEvictionAsyncProducer creates a txmeta producer for block assembly and
+// UTXO create-first recovery to publish DELETEs for demoted txs. It returns nil, nil
+// when no txmeta topic is configured.
 //
 // Unlike the validator's producer this never uses manual partitioning, even when
 // Validator.TxMetaWireFormat is "v2": the DELETEs are v1-format messages keyed by tx
 // hash, which subtreevalidation's txmetaHandler detects per message, so they need no
 // xxhash bucket routing.
-func getKafkaTxmetaEvictionAsyncProducer(ctx context.Context, logger ulogger.Logger,
+var getKafkaTxmetaEvictionAsyncProducer = func(ctx context.Context, logger ulogger.Logger,
 	settings *settings.Settings) (kafka.KafkaAsyncProducerI, error) {
 	kafkaTxmetaConfig := settings.Kafka.TxMetaConfig
 	if kafkaTxmetaConfig == nil {
@@ -103,7 +103,7 @@ func getKafkaTxmetaEvictionAsyncProducer(ctx context.Context, logger ulogger.Log
 
 	producer, err := getKafkaAsyncProducer(ctx, logger, kafkaTxmetaConfig, &settings.Kafka)
 	if err != nil {
-		return nil, errors.NewServiceError("could not create txmeta kafka producer for block assembly", err)
+		return nil, errors.NewServiceError("could not create txmeta kafka eviction producer", err)
 	}
 
 	return producer, nil
