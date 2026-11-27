@@ -140,6 +140,20 @@ func TestBitmapsWriteRetryGivesEachRetryTheBoundAsItsDeadline(t *testing.T) {
 	require.Equal(t, deadlines[1], deadlines[2], "every retry ends at the same bound")
 }
 
+// With the defaults, a write is retried for a minute, with waits doubling from 250ms to a 4s cap.
+func TestBitmapsWriteRetryDefaults(t *testing.T) {
+	var r BitmapsWriteRetry
+
+	require.Equal(t, time.Minute, r.bound())
+
+	waits := []time.Duration{r.firstBackoff()}
+	for len(waits) < 7 {
+		waits = append(waits, r.nextBackoff(waits[len(waits)-1]))
+	}
+
+	require.Equal(t, []time.Duration{250 * time.Millisecond, 500 * time.Millisecond, time.Second, 2 * time.Second, 4 * time.Second, 4 * time.Second, 4 * time.Second}, waits)
+}
+
 // A context that ends during the backoff stops the retry at once, and a write that fails with the
 // context already ended is not retried; neither counts as exhausted.
 func TestBitmapsWriteRetryStopsWithItsContext(t *testing.T) {

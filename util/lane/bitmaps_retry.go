@@ -20,8 +20,8 @@ import (
 // checkpoint on a large database. It is a small part of the ten minutes between blocks.
 const DefaultBitmapsWriteRetryBound = time.Minute
 
-// The backoff between attempts doubles from the first to the cap, so a short blip is retried
-// within a second and a database back from a restart is found within the cap.
+// The backoff between attempts doubles from the first to the cap. While a write is still retrying,
+// the wait before its next attempt is at most the cap.
 const (
 	defaultBitmapsWriteFirstBackoff = 250 * time.Millisecond
 	defaultBitmapsWriteMaxBackoff   = 4 * time.Second
@@ -68,6 +68,11 @@ func (r *BitmapsWriteRetry) maxBackoff() time.Duration {
 	}
 
 	return defaultBitmapsWriteMaxBackoff
+}
+
+// nextBackoff is the wait after one of backoff: double it, up to the cap.
+func (r *BitmapsWriteRetry) nextBackoff(backoff time.Duration) time.Duration {
+	return min(2*backoff, r.maxBackoff())
 }
 
 // failed notes a failure at now and returns when the outage it belongs to began: an outage ends
@@ -159,7 +164,7 @@ func (r *BitmapsWriteRetry) Do(ctx context.Context, service string, write func(c
 
 		r.failed(time.Now())
 
-		backoff = min(2*backoff, r.maxBackoff())
+		backoff = r.nextBackoff(backoff)
 	}
 }
 
