@@ -92,6 +92,7 @@ type Plan struct {
 	mu      sync.Mutex
 	rules   []*Rule
 	calls   []Call
+	epoch   uint64
 }
 
 // NewPlan returns an empty plan: every call passes through and is logged.
@@ -280,7 +281,8 @@ func (p *Plan) Methods() []string {
 	return out
 }
 
-// Reset clears the log and every rule's match count; the rules stay.
+// Reset clears the log and every rule's match count; the rules stay. Calls already in flight
+// remain absent from the new log when they finish.
 func (p *Plan) Reset() {
 	p.matchMu.Lock()
 	defer p.matchMu.Unlock()
@@ -289,6 +291,7 @@ func (p *Plan) Reset() {
 	defer p.mu.Unlock()
 
 	p.calls = nil
+	p.epoch++
 
 	for _, r := range p.rules {
 		r.matched = 0
@@ -300,6 +303,8 @@ type call struct {
 	plan   *Plan
 	ctx    context.Context
 	idx    int // index into plan.calls
+	epoch  uint64
+	record Call
 	rule   *Rule
 	hasErr bool
 }
@@ -336,9 +341,10 @@ func (p *Plan) enter(ctx context.Context, store, method string, hasErr bool, arg
 	p.mu.Lock()
 	p.calls = append(p.calls, c)
 	idx := len(p.calls) - 1
+	epoch := p.epoch
 	p.mu.Unlock()
 
-	return &call{plan: p, ctx: ctx, idx: idx, rule: fired, hasErr: hasErr}
+	return &call{plan: p, ctx: ctx, idx: idx, epoch: epoch, record: c, rule: fired, hasErr: hasErr}
 }
 
 // before runs the rule's pre-call action. A non-nil error means: return it without calling the
@@ -397,7 +403,9 @@ func (c *call) after(err error) error {
 	}
 
 	c.plan.mu.Lock()
-	c.plan.calls[c.idx].Err = err
+	if c.epoch == c.plan.epoch {
+		c.plan.calls[c.idx].Err = err
+	}
 	c.plan.mu.Unlock()
 
 	return err
@@ -406,6 +414,10 @@ func (c *call) after(err error) error {
 func (c *call) snapshot() Call {
 	c.plan.mu.Lock()
 	defer c.plan.mu.Unlock()
+
+	if c.epoch != c.plan.epoch {
+		return c.record
+	}
 
 	return c.plan.calls[c.idx]
 }

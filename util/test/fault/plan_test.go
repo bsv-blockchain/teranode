@@ -345,6 +345,38 @@ func TestResetClearsTheLogAndRestartsTriggers(t *testing.T) {
 	require.Equal(t, []bool{true, false}, existsResults(t, s, 2))
 }
 
+func TestResetWhileCallInFlight(t *testing.T) {
+	plan := fault.NewPlan()
+	plan.On("Get").Block(make(chan struct{}))
+	s := blobStore(t, plan)
+
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	done := make(chan error, 1)
+	go func() {
+		_, err := s.Get(ctx, key("a"), fileformat.FileTypeSubtree)
+		done <- err
+	}()
+
+	require.Eventually(t, func() bool { return plan.Count("Get") == 1 }, time.Second, time.Millisecond)
+	plan.Reset()
+
+	_, err := s.Exists(context.Background(), key("a"), fileformat.FileTypeSubtree)
+	require.NoError(t, err)
+	cancel()
+	select {
+	case err := <-done:
+		require.ErrorIs(t, err, context.Canceled)
+	case <-time.After(5 * time.Second):
+		t.Fatal("the blocked call did not finish after cancellation")
+	}
+
+	calls := plan.Calls()
+	require.Len(t, calls, 1)
+	require.Equal(t, "Exists", calls[0].Method)
+	require.NoError(t, calls[0].Err, "the old call must not overwrite the new log")
+}
+
 func TestUTXOStoreUnwrapsForCapabilityLookup(t *testing.T) {
 	ctx := context.Background()
 	tSettings := test.CreateBaseTestSettings(t)
