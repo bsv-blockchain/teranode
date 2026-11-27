@@ -502,8 +502,8 @@ func seedStampsPositionsAndRows(t *testing.T, heights []uint32, postgres bool) {
 	require.True(t, written)
 	require.NoError(t, f.seed(false))
 
-	// So does a forced run that stops while removing the old import markers: here the tip
-	// record goes and lastProcessed.dat, made a non-empty directory, cannot.
+	// A forced run that stops while removing the old import markers keeps the lane completion
+	// records set: here the tip record goes and lastProcessed.dat, a non-empty directory, cannot.
 	marker := filepath.Join(f.settings.Block.BlockStore.Path, "lastProcessed.dat")
 	saved, err := os.ReadFile(marker)
 	require.NoError(t, err)

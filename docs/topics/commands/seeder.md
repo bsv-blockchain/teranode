@@ -97,7 +97,9 @@ At `off` the seeder writes no lane positions. At `shadow` it also:
    with no such record gets no row.
 
 Taking a new grant needs a blockchain database that has never handed out a
-lane position; a re-run of the same snapshot reuses its recorded grant. A seed
+lane position. A re-run of the same snapshot reuses its recorded grant, and
+one that follows an attempt stopped before it recorded its grant may take a
+new one while every earlier grant is at height 0, where seeds record theirs. A seed
 at `shadow` also refuses a named pipe as its snapshot, because it reads the
 file more than once. On utxoset, run `teranode-cli prepare-lane-schema`
 first.

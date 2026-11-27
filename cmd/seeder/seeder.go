@@ -730,7 +730,7 @@ func processUTXOs(ctx context.Context, logger ulogger.Logger, appSettings *setti
 
 	if lanes != nil {
 		// Only now can the import change the records the old rows describe, so a run that
-		// stops in preparation or marker deletion leaves the seed's lane completion records set.
+		// stops in preparation or marker deletion leaves the seed's lane completion records unchanged.
 		if err = setSeededRowsWritten(ctx, blockchainStore, hash, false); err != nil {
 			return nil, err
 		}
