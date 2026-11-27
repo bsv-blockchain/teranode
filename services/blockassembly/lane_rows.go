@@ -203,8 +203,11 @@ func (o *ownLaneBitmaps) list(roots []chainhash.Hash, height uint32) {
 }
 
 // writeLaneBitmapsFile writes a subtree's lane bitmaps file, to live until dah. A file already
-// there gets dah; a file that cannot be encoded or written is counted under block="own".
-func (ba *BlockAssembly) writeLaneBitmapsFile(ctx context.Context, bitmaps lane.SubtreeBitmaps, dah uint32) {
+// there is given dah, and a failure to give it is logged without failing the write. A write the
+// store refuses returns a storage error; storing a new subtree then writes no subtree file on
+// that attempt. Bitmaps that cannot be encoded are a lane fault, not a store one, return nil, and
+// do not stop the subtree. Either failure is counted under block="own".
+func (ba *BlockAssembly) writeLaneBitmapsFile(ctx context.Context, bitmaps lane.SubtreeBitmaps, dah uint32) error {
 	root := bitmaps.SubtreeHash
 
 	data, err := lane.EncodeSubtreeBitmaps(bitmaps)
@@ -212,7 +215,7 @@ func (ba *BlockAssembly) writeLaneBitmapsFile(ctx context.Context, bitmaps lane.
 		lane.CountMissingBitmaps(lane.BlockOwn, lane.MissingBitmapsWriteFailed, 1)
 		ba.logger.Warnf("[BlockAssembly:storeSubtreeData][%s] storing the subtree without its lane bitmaps file, which could not be encoded: %v", root.String(), err)
 
-		return
+		return nil
 	}
 
 	// An exclusive publish bounds the file store's delete-at scheduling, which the subtree file
@@ -233,25 +236,47 @@ func (ba *BlockAssembly) writeLaneBitmapsFile(ctx context.Context, bitmaps lane.
 			ba.logger.Warnf("[BlockAssembly:storeSubtreeData][%s] the lane bitmaps file may now expire before its subtree, whose DAH update failed: %v", root.String(), dahErr)
 		}
 	case err != nil:
-		// a peer's block that lists this subtree will count it absent; our own uses the kept bitmaps
 		lane.CountMissingBitmaps(lane.BlockOwn, lane.MissingBitmapsWriteFailed, 1)
-		ba.logger.Warnf("[BlockAssembly:storeSubtreeData][%s] storing the subtree without its lane bitmaps file, whose write failed: %v", root.String(), err)
+
+		return errors.NewStorageError("[BlockAssembly:storeSubtreeData][%s] failed to store the subtree's lane bitmaps file", root.String(), err)
 	}
+
+	return nil
 }
 
 // writeKeptLaneBitmapsFile writes the kept lane bitmaps of subtree root as its lane bitmaps file,
 // to live until dah, and marks them as stored at height. A subtree with no bitmaps kept gets no
-// file, which is counted as write_failed under block="own" and logged.
-func (ba *BlockAssembly) writeKeptLaneBitmapsFile(ctx context.Context, root chainhash.Hash, height, dah uint32) {
+// file, which is counted as write_failed under block="own" and logged, and does not stop the
+// subtree. It returns the error of a write the store refused (writeLaneBitmapsFile).
+func (ba *BlockAssembly) writeKeptLaneBitmapsFile(ctx context.Context, root chainhash.Hash, height, dah uint32) error {
 	lanes, kept := ba.ownLaneBitmaps.lookup(root)
+
+	return ba.writeCapturedLaneBitmapsFile(ctx, root, lanes, kept, height, dah)
+}
+
+// writeCapturedLaneBitmapsFile is writeKeptLaneBitmapsFile for bitmaps the caller already read:
+// lanes, when kept is true.
+func (ba *BlockAssembly) writeCapturedLaneBitmapsFile(ctx context.Context, root chainhash.Hash, lanes lane.LaneBitmaps, kept bool, height, dah uint32) error {
 	if !kept {
 		lane.CountMissingBitmaps(lane.BlockOwn, lane.MissingBitmapsWriteFailed, 1)
 		ba.logger.Warnf("[BlockAssembly:storeSubtreeData][%s] storing the subtree without its lane bitmaps file: it has no lane bitmaps kept", root.String())
-		return
+
+		return nil
 	}
 
 	ba.ownLaneBitmaps.touch(root, height)
-	ba.writeLaneBitmapsFile(ctx, lane.SubtreeBitmaps{SubtreeHash: root, Lanes: lanes}, dah)
+
+	return ba.writeLaneBitmapsFile(ctx, lane.SubtreeBitmaps{SubtreeHash: root, Lanes: lanes}, dah)
+}
+
+// laneRetryBitmaps returns the kept lane bitmaps of subtree root for a storage retry to carry, and
+// whether lanes are on and any are kept.
+func (ba *BlockAssembly) laneRetryBitmaps(root chainhash.Hash) (lane.LaneBitmaps, bool) {
+	if !ba.keepsLanePositions() {
+		return nil, false
+	}
+
+	return ba.ownLaneBitmaps.lookup(root)
 }
 
 // keepExistingSubtreeLaneBitmaps is the lane half of storing a subtree the store already has: the
@@ -267,9 +292,12 @@ func (ba *BlockAssembly) keepExistingSubtreeLaneBitmaps(ctx context.Context, roo
 
 	switch {
 	case errors.Is(err, errors.ErrNotFound):
-		// an earlier write of the file failed while its bitmaps were kept: write it now from the
-		// kept bitmaps, whose members were counted when they were kept
-		ba.writeKeptLaneBitmapsFile(ctx, root, height, dah)
+		// the subtree was stored without the file, before its bitmaps were kept or while they
+		// could not be encoded: write it now from the kept bitmaps, whose members were counted
+		// when they were kept
+		if writeErr := ba.writeKeptLaneBitmapsFile(ctx, root, height, dah); writeErr != nil {
+			ba.logger.Warnf("[BlockAssembly:storeSubtreeData][%s] the stored subtree is still without its lane bitmaps file: %v", root.String(), writeErr)
+		}
 	case err != nil:
 		ba.logger.Warnf("[BlockAssembly:storeSubtreeData][%s] the lane bitmaps file may now expire before its subtree, whose DAH update failed: %v", root.String(), err)
 	}
