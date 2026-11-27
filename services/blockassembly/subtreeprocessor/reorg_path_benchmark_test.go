@@ -79,6 +79,10 @@ func benchmarkReorgPath(b *testing.B, cfg reorgScenarioConfig, path reorgPath) {
 
 		b.StopTimer()
 
+		// b.Cleanup runs once per round, so without this every iteration's processor, tx map and
+		// listener would stay alive during the next timed reorg.
+		sc.release()
+
 		if err != nil {
 			b.Fatal(err)
 		}
