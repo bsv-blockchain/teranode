@@ -30,6 +30,7 @@ type storeRequests struct {
 	mu      sync.Mutex
 	roots   []chainhash.Hash
 	results []chan StoreResult // the Result channel of each request, nil when it had none
+	cleanup []func()           // the OnStorageComplete of each request
 }
 
 func (r *storeRequests) has(root chainhash.Hash) bool {
@@ -74,6 +75,7 @@ func newStoredPrefixProcessor(t testing.TB, itemsPerSubtree int, set *StoredSet,
 				log.mu.Lock()
 				log.roots = append(log.roots, *req.Subtree.RootHash())
 				log.results = append(log.results, req.Result)
+				log.cleanup = append(log.cleanup, req.OnStorageComplete)
 				log.mu.Unlock()
 
 				if req.ErrChan != nil {
@@ -515,7 +517,7 @@ func newWatchedProcessor(t *testing.T, mutate ...func(*SubtreeProcessor)) (*Subt
 	requests.reset()
 
 	requests.mu.Lock()
-	requests.results = nil
+	requests.results, requests.cleanup = nil, nil
 	requests.mu.Unlock()
 
 	return stp, set, requests
@@ -783,4 +785,54 @@ func TestStoredPrefixWatch_ARootIsNotSentAgainWhileItsLastSendIsOutstanding(t *t
 	set.Finish(chainRoot(stp, 2), failed, false)
 	stp.maintainStoredPrefix(t0.Add(400 * time.Second))
 	requests.requireSent(t, chainRoot(stp, 2))
+}
+
+// A full store queue is exactly when the prefix is stuck: the next tick tries again, not a floor later.
+func TestStoredPrefixWatch_AFullQueueIsTriedAgainOnTheNextTick(t *testing.T) {
+	stp, _, requests := newWatchedProcessor(t)
+	t0 := time.Now()
+
+	stp.maintainStoredPrefix(t0)
+
+	drained := stp.newSubtreeChan
+	stp.newSubtreeChan = make(chan NewSubtreeRequest) // nobody receives: every send takes default
+
+	stp.maintainStoredPrefix(t0.Add(151 * time.Second))
+	requests.requireNoneSent(t)
+
+	stp.newSubtreeChan = drained
+	stp.maintainStoredPrefix(t0.Add(156 * time.Second))
+	requests.requireSent(t, chainRoot(stp, 0))
+}
+
+// In a long outage every failed root is a send that holds its bytes in the retry channel.
+func TestStoredPrefixWatch_FailedRootsAreSentAgainOnePerTick(t *testing.T) {
+	stp, set, requests := newWatchedProcessor(t)
+	t0 := time.Now()
+	failed := StoreResult{Err: errors.NewStorageError("outage")}
+
+	for i := 1; i <= 3; i++ {
+		set.Finish(chainRoot(stp, i), failed, false)
+	}
+
+	stp.maintainStoredPrefix(t0)
+	requests.requireSent(t, chainRoot(stp, 1))
+
+	stp.maintainStoredPrefix(t0.Add(time.Second))
+	requests.requireSent(t, chainRoot(stp, 2))
+}
+
+// The first request may still read DeletedTxs for its meta build: only its own completion cleans.
+func TestStoredPrefixWatch_AResendDoesNotCleanUpTheDeletedTxs(t *testing.T) {
+	stp, set, requests := newWatchedProcessor(t)
+
+	set.Finish(chainRoot(stp, 1), StoreResult{Err: errors.NewStorageError("x")}, false)
+	stp.maintainStoredPrefix(time.Now())
+	requests.requireSent(t, chainRoot(stp, 1))
+
+	requests.mu.Lock()
+	defer requests.mu.Unlock()
+
+	require.Len(t, requests.cleanup, 1)
+	require.Nil(t, requests.cleanup[0])
 }

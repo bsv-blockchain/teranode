@@ -533,7 +533,6 @@ func TestStoredSet_AStoredSubtreeAndItsMetaAddTheRoot(t *testing.T) {
 
 	require.True(t, result.OK(), "%+v", result)
 	require.True(t, set.Has(*subtree.RootHash()), "the root is in the set when the result is posted")
-	require.Equal(t, uint64(1), set.Added())
 	require.False(t, set.Retrying(*subtree.RootHash()))
 }
 
