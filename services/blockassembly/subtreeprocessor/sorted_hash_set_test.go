@@ -318,6 +318,12 @@ func TestSortedHashSet_FrozenContract(t *testing.T) {
 	require.Error(t, s.PutMultiBucket(0, []chainhash.Hash{h}), "PutMultiBucket after Freeze must fail")
 	require.Error(t, s.Freeze(1), "second Freeze must fail")
 	require.Equal(t, 1, s.Length())
+
+	// the position API must not answer before Freeze either
+	open := NewSortedHashSet(10)
+	require.Panics(t, func() { open.Find(h) })
+	require.Panics(t, func() { open.Positions() })
+	require.Panics(t, func() { open.IterPositions(1, func(int, uint64, *chainhash.Hash) {}) })
 }
 
 func TestSortedHashSet_EmptyAndSingle(t *testing.T) {
@@ -326,6 +332,12 @@ func TestSortedHashSet_EmptyAndSingle(t *testing.T) {
 	require.Equal(t, 0, s.Length())
 	require.False(t, s.Exists(chainhash.Hash{}))
 	require.Empty(t, collect(s))
+
+	pos, ok := s.Find(chainhash.Hash{1})
+	require.False(t, ok)
+	require.Zero(t, pos)
+	require.Zero(t, s.Positions())
+	s.IterPositions(2, func(int, uint64, *chainhash.Hash) { t.Fatal("empty set visited") })
 
 	h := randHashes(1, 3)[0]
 	s = buildSet(t, []chainhash.Hash{h}, 1, 1)
@@ -473,10 +485,9 @@ func findReference(hashes []chainhash.Hash) map[chainhash.Hash]uint64 {
 	return ref
 }
 
-// TestSortedHashSet_Find pins the position contract of PR 5: Find agrees with Exists,
-// a position is in [0, Positions()), distinct hashes get distinct positions, a
-// duplicated hash maps to the first of its run, and IterPositions visits each
-// distinct hash once with the position Find returns.
+// TestSortedHashSet_Find pins the position contract: Find agrees with Exists, distinct
+// hashes get distinct positions, a duplicate maps to the first of its run, and
+// IterPositions visits each distinct hash once with the position Find returns.
 func TestSortedHashSet_Find(t *testing.T) {
 	for _, tc := range []struct {
 		name       string
@@ -544,25 +555,8 @@ func TestSortedHashSet_Find(t *testing.T) {
 	}
 }
 
-func TestSortedHashSet_FindEmptyAndUnfrozen(t *testing.T) {
-	empty := buildSet(t, nil, 0, 1)
-	pos, ok := empty.Find(chainhash.Hash{1})
-	require.False(t, ok)
-	require.Zero(t, pos)
-	require.Zero(t, empty.Positions())
-	empty.IterPositions(2, func(int, uint64, *chainhash.Hash) { t.Fatal("empty set visited") })
-
-	open := NewSortedHashSet(10)
-	require.Panics(t, func() { open.Find(chainhash.Hash{1}) })
-	require.Panics(t, func() { open.Positions() })
-	require.Panics(t, func() { open.IterPositions(1, func(int, uint64, *chainhash.Hash) {}) })
-}
-
-// BenchmarkReorgSortedHashSetFind times the position-returning lookup of the reorg delta
-// on a frozen set, probing members in random order, which is what the delta does for the
-// nodes both sides have. The set is in process memory and the probes are one goroutine's,
-// so this is the cost of one probe with a warm directory; a real 1.2B-hash set misses
-// the TLB and the cache far more (design section 4.4).
+// BenchmarkReorgSortedHashSetFind times Find on a frozen in-memory set, probing members
+// in random order: the cost of one probe with a warm directory.
 func BenchmarkReorgSortedHashSetFind(b *testing.B) {
 	sizes := []int{1 << 20, 1 << 22}
 	if testing.Short() {

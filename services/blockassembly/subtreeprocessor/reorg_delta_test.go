@@ -179,10 +179,20 @@ func requireDeltaMatchesReference(t testing.TB, stp *SubtreeProcessor, d *deltaB
 }
 
 // TestReorgDelta_MatchesReference pins that both directions are exact against a map
-// model at every overlap, with one and several blocks per side, where the placeholder
-// is a duplicate of the union set across the forward blocks.
+// model: at every overlap with one and several blocks per side, and for duplicates in
+// the winners, a duplicate that was lost, a many-partition winner set, any worker bound.
 func TestReorgDelta_MatchesReference(t *testing.T) {
 	stp, store := newTxMapTestProcessor(t)
+
+	type row struct {
+		name    string
+		c       deltaCase
+		workers int
+		// fixture preconditions, so a row cannot pass without the shape it is named for
+		wantDups, wantLostDup, wantPartitions bool
+	}
+
+	var rows []row
 
 	seed := int64(100)
 
@@ -191,100 +201,56 @@ func TestReorgDelta_MatchesReference(t *testing.T) {
 			seed++
 
 			c := deltaCase{lostBlocks: shape.lost, winBlocks: shape.win, subtrees: 3, subtreeSize: 64, overlap: overlap, seed: seed}
-
-			t.Run(testName(c), func(t *testing.T) {
-				requireDeltaMatchesReference(t, stp, newDeltaBlocks(t, store, c), 4)
-			})
+			rows = append(rows, row{name: testName(c), c: c, workers: 4})
 		}
+	}
+
+	rows = append(rows,
+		row{name: "duplicate across winners", workers: 3, wantDups: true,
+			c: deltaCase{lostBlocks: 1, winBlocks: 3, subtrees: 2, subtreeSize: 64, overlap: 0.5, seed: 7, dupAcrossWinners: true}},
+		row{name: "duplicate winner that was lost", workers: 3, wantDups: true, wantLostDup: true,
+			c: deltaCase{lostBlocks: 2, winBlocks: 2, subtrees: 2, subtreeSize: 64, overlap: 0.3, seed: 21, dupAcrossWinners: true, dupIsLost: true}},
+		row{name: "many partitions overlap 50", workers: 4, wantDups: true, wantLostDup: true, wantPartitions: true,
+			c: deltaCase{lostBlocks: 1, winBlocks: 2, subtrees: 2, subtreeSize: 1 << 16, overlap: 0.5, seed: 36, dupAcrossWinners: true, dupIsLost: true}},
+		row{name: "many partitions overlap 100", workers: 4, wantDups: true, wantLostDup: true, wantPartitions: true,
+			c: deltaCase{lostBlocks: 1, winBlocks: 2, subtrees: 2, subtreeSize: 1 << 16, overlap: 1, seed: 41, dupAcrossWinners: true, dupIsLost: true}},
+	)
+
+	for _, w := range []int{0, 1, 2, 16} {
+		rows = append(rows, row{name: fmt.Sprintf("workers %d", w), workers: w,
+			c: deltaCase{lostBlocks: 2, winBlocks: 2, subtrees: 4, subtreeSize: 32, overlap: 0.7, seed: 9}})
+	}
+
+	for _, r := range rows {
+		t.Run(r.name, func(t *testing.T) {
+			d := newDeltaBlocks(t, store, r.c)
+
+			if r.wantDups || r.wantPartitions {
+				winners, err := stp.buildUnionSet(context.Background(), d.winners)
+				require.NoError(t, err)
+
+				if r.wantDups {
+					require.Less(t, winners.Length(), int(winners.Positions()), "the fixture must have duplicates")
+				}
+
+				if r.wantPartitions {
+					require.Greater(t, winners.Partitions(), 1)
+				}
+			}
+
+			if r.wantLostDup {
+				dup := d.winnerLeaves[0][0][1]
+				require.Equal(t, dup, d.winnerLeaves[1][0][1])
+				require.Equal(t, dup, d.lostLeaves[0][0][1])
+			}
+
+			requireDeltaMatchesReference(t, stp, d, r.workers)
+		})
 	}
 }
 
 func testName(c deltaCase) string {
 	return "lost" + string(rune('0'+c.lostBlocks)) + "_win" + string(rune('0'+c.winBlocks)) + "_overlap" + string(rune('0'+int(c.overlap*10)/10)) + string(rune('0'+int(c.overlap*10)%10))
-}
-
-// TestReorgDelta_Duplicates covers the two shapes of duplicates in the winners: the
-// coinbase placeholder, one per forward block, and a hash in two winner blocks. A
-// duplicate must neither appear twice in D2 nor hide a distinct hash.
-func TestReorgDelta_Duplicates(t *testing.T) {
-	stp, store := newTxMapTestProcessor(t)
-	c := deltaCase{lostBlocks: 1, winBlocks: 3, subtrees: 2, subtreeSize: 64, overlap: 0.5, seed: 7, dupAcrossWinners: true}
-	d := newDeltaBlocks(t, store, c)
-
-	winners, err := stp.buildUnionSet(context.Background(), d.winners)
-	require.NoError(t, err)
-	require.Less(t, winners.Length(), int(winners.Positions()), "the fixture must have duplicates")
-
-	requireDeltaMatchesReference(t, stp, d, 3)
-
-	// the duplicated hash is in D2 exactly once, when nobody lost it
-	dup := d.winnerLeaves[0][0][1]
-	got, err := stp.computeReorgDelta(context.Background(), d.lost, winners, 3)
-	require.NoError(t, err)
-
-	n := 0
-
-	for _, h := range got.D2 {
-		if h == dup {
-			n++
-		}
-	}
-
-	require.LessOrEqual(t, n, 1)
-}
-
-// TestReorgDelta_DuplicateWinnerThatWasLost pins a winner hash present in two winner blocks
-// and in a lost block: one hit, in neither D1 nor D2, and nothing else lost with it.
-func TestReorgDelta_DuplicateWinnerThatWasLost(t *testing.T) {
-	stp, store := newTxMapTestProcessor(t)
-	d := newDeltaBlocks(t, store, deltaCase{lostBlocks: 2, winBlocks: 2, subtrees: 2, subtreeSize: 64, overlap: 0.3, seed: 21, dupAcrossWinners: true, dupIsLost: true})
-	dup := d.winnerLeaves[0][0][1]
-
-	require.Equal(t, dup, d.winnerLeaves[1][0][1])
-	require.Equal(t, dup, d.lostLeaves[0][0][1])
-
-	winners, err := stp.buildUnionSet(context.Background(), d.winners)
-	require.NoError(t, err)
-
-	got, err := stp.computeReorgDelta(context.Background(), d.lost, winners, 3)
-	require.NoError(t, err)
-
-	for _, n := range got.D1 {
-		require.NotEqual(t, dup, n.Hash)
-	}
-
-	require.NotContains(t, got.D2, dup)
-	requireDeltaMatchesReference(t, stp, d, 3)
-}
-
-// TestReorgDelta_ManyPartitions runs the delta on a winner set of several partitions, where D2
-// joins the partitions' lists, IterPositions calls back from several goroutines and the bitmap
-// positions of partitions after the first start above zero.
-func TestReorgDelta_ManyPartitions(t *testing.T) {
-	stp, store := newTxMapTestProcessor(t)
-
-	for _, overlap := range []float64{0.5, 1} {
-		d := newDeltaBlocks(t, store, deltaCase{
-			lostBlocks: 1, winBlocks: 2, subtrees: 2, subtreeSize: 1 << 16,
-			overlap: overlap, seed: 31 + int64(overlap*10), dupAcrossWinners: true, dupIsLost: true,
-		})
-
-		winners, err := stp.buildUnionSet(context.Background(), d.winners)
-		require.NoError(t, err)
-		require.Greater(t, winners.Partitions(), 1)
-
-		requireDeltaMatchesReference(t, stp, d, 4)
-	}
-}
-
-// TestReorgDelta_WorkerCounts pins that the answer does not depend on the worker bound.
-func TestReorgDelta_WorkerCounts(t *testing.T) {
-	stp, store := newTxMapTestProcessor(t)
-	d := newDeltaBlocks(t, store, deltaCase{lostBlocks: 2, winBlocks: 2, subtrees: 4, subtreeSize: 32, overlap: 0.7, seed: 9})
-
-	for _, w := range []int{0, 1, 2, 16} {
-		requireDeltaMatchesReference(t, stp, d, w)
-	}
 }
 
 // TestReorgDelta_UnreadableSubtreeFails pins that no partial result is returned when a
@@ -357,10 +323,8 @@ func FuzzReorgDelta(f *testing.F) {
 	})
 }
 
-// BenchmarkReorgDelta times computeReorgDelta for a lost block of 1M nodes against a winner
-// set of 2M hashes (two forward blocks), at 50% and 99% of the lost nodes in the winners. The
-// subtrees are real files in the memory blob store and are read and parsed in every
-// iteration; the set is built once, outside the timer.
+// BenchmarkReorgDelta times computeReorgDelta for 1M lost nodes against a 2M-hash winner
+// set at 50% and 99% overlap; subtrees are read from the memory blob store every iteration.
 func BenchmarkReorgDelta(b *testing.B) {
 	overlaps := []float64{0.5, 0.99}
 	if testing.Short() {
