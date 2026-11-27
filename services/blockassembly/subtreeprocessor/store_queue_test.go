@@ -1235,6 +1235,74 @@ func TestReorgScenario_StoreQueue_ARestoredChainRequestCancelledBeforeTheRollbac
 	}
 }
 
+// A request that failed for good records the announcement it would have made, so the subtree the
+// watch sends again announces when it stores. A sibling that announced it leaves nothing to record.
+func TestStoreQueue_AFailedRequestRecordsTheAnnouncementItWouldHaveMade(t *testing.T) {
+	for name, tc := range map[string]struct {
+		silent, ann, siblingStored, early bool
+		lost                              bool
+	}{
+		"announcing request":                  {lost: true},
+		"silent request":                      {silent: true},
+		"silent request told to announce":     {silent: true, ann: true, lost: true},
+		"sibling already announced":           {silent: true, ann: true, siblingStored: true},
+		"recorded before the failure is seen": {silent: true, ann: true, early: true, lost: true},
+	} {
+		t.Run(name, func(t *testing.T) {
+			q := NewStoreQueue(1 << 40)
+			req := chainRequest(t, 1)
+			req.SkipNotification = tc.silent
+			sibling := NewSubtreeRequest{Subtree: req.Subtree, SkipNotification: true, ErrChan: make(chan error, 1)}
+			q.Push(req)
+			q.Push(sibling)
+
+			if tc.ann {
+				require.True(t, q.AnnounceOnSuccess(req.Subtree))
+			}
+
+			first, _, ok := q.Take(takeCtx(t, 5*time.Second))
+			require.True(t, ok)
+			second, _, ok := q.Take(takeCtx(t, 5*time.Second))
+			require.True(t, ok)
+
+			if tc.siblingStored {
+				require.True(t, second.SettledFunc()(true))
+			}
+
+			if tc.early {
+				first.Failing()
+				require.True(t, q.announceWasLost(req.Subtree), "recorded while the request is still registered")
+
+				return
+			}
+
+			require.False(t, first.SettledFunc()(false))
+			require.Equal(t, tc.lost, q.announceWasLost(req.Subtree))
+		})
+	}
+}
+
+// Two requests of one subtree share an announcement: when the second stores and announces it after
+// the first failed, the subtree is not announced a second time by the watch's re-send.
+func TestStoreQueue_ASiblingThatAnnouncesClearsTheLostAnnouncement(t *testing.T) {
+	q := NewStoreQueue(1 << 40)
+	failing := chainRequest(t, 1)
+	failing.SkipNotification = true
+	sibling := NewSubtreeRequest{Subtree: failing.Subtree, SkipNotification: true, ErrChan: make(chan error, 1)}
+	q.Push(failing)
+	q.Push(sibling)
+	require.True(t, q.AnnounceOnSuccess(failing.Subtree))
+
+	first, _, ok := q.Take(takeCtx(t, 5*time.Second))
+	require.True(t, ok)
+	second, _, ok := q.Take(takeCtx(t, 5*time.Second))
+	require.True(t, ok)
+
+	require.False(t, first.SettledFunc()(false))
+	require.True(t, second.SettledFunc()(true), "the sibling announces")
+	require.False(t, q.announceWasLost(failing.Subtree), "so the watch's re-send stays silent")
+}
+
 // The roots of dropped announcing requests are kept only for a rollback of the block movement in
 // progress, so the set is capped: past announceLostCap it starts again instead of growing for good.
 func TestStoreQueue_TheLostAnnouncementSetIsBounded(t *testing.T) {

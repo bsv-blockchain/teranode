@@ -42,6 +42,10 @@ type subtreeStoreOutcome struct {
 	// settled is the request's Settled: the store queue's charge for it ends with its store.
 	settled func(ok bool) bool
 
+	// failing is the request's Failing: it records the announcement a failed request loses before
+	// the failure is published to the stored set, which a watch resends on.
+	failing func()
+
 	// set is the stored set the settled request reports to, with the request's root, when
 	// blockassembly_storedPrefixTemplate is on; nil otherwise.
 	set      *subtreeprocessor.StoredSet
@@ -50,7 +54,7 @@ type subtreeStoreOutcome struct {
 }
 
 func newSubtreeStoreOutcome(request subtreeprocessor.NewSubtreeRequest, metaApplicable bool, late chan<- chainhash.Hash) *subtreeStoreOutcome {
-	o := &subtreeStoreOutcome{result: request.Result, skip: request.SkipNotification, late: late, pending: 1, settled: request.SettledFunc()}
+	o := &subtreeStoreOutcome{result: request.Result, skip: request.SkipNotification, late: late, pending: 1, settled: request.SettledFunc(), failing: request.Failing}
 	if metaApplicable {
 		o.pending++
 	} else {
@@ -79,6 +83,10 @@ func (o *subtreeStoreOutcome) settle(apply func(r *subtreeprocessor.StoreResult)
 	o.pending--
 	if o.pending == 0 {
 		// before the result is posted, so a waiter that sees the result finds the root in the set
+		if !o.res.OK() && o.failing != nil {
+			o.failing()
+		}
+
 		if o.set != nil {
 			o.set.Finish(o.root, o.res, o.retrying)
 		}

@@ -104,6 +104,7 @@ type NewSubtreeRequest struct {
 
 	answered func(err error)    // set by a StoreQueue: see Answered
 	settled  func(ok bool) bool // set by a StoreQueue: see Settled
+	failing  func()             // set by a StoreQueue: see Failing
 }
 
 // moveBlockRequest represents a request to move a block in the chain.

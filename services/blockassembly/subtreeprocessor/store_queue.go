@@ -119,6 +119,7 @@ func (q *StoreQueue) Push(req NewSubtreeRequest) {
 	it.result = req.Result
 	req.answered = func(err error) { q.answered(it, err) }
 	req.settled = func(ok bool) bool { return q.settled(it, ok) }
+	req.failing = func() { q.failing(it) }
 	it.req = req
 
 	q.mu.Lock()
@@ -259,6 +260,23 @@ func (q *StoreQueue) noteAnnounceLost(root chainhash.Hash) {
 	q.announceLost[root] = struct{}{}
 }
 
+// wouldAnnounce reports whether the request announces its subtree when it stores: it is not silent,
+// or it holds an announcement nobody claimed. q.mu is held.
+func (it *storeItem) wouldAnnounce() bool {
+	return !it.req.AnnounceOnly && (!it.req.SkipNotification || (it.ann != nil && !it.ann.claimed))
+}
+
+// failing records the announcement a request that failed for good would have made, before the
+// failure is published, so that a watch that sees it finds the loss.
+func (q *StoreQueue) failing(it *storeItem) {
+	q.mu.Lock()
+	defer q.mu.Unlock()
+
+	if !it.done && it.wouldAnnounce() {
+		q.noteAnnounceLost(*it.req.Subtree.RootHash())
+	}
+}
+
 // announceWasLost reports, once, whether a request that would have announced st was dropped.
 func (q *StoreQueue) announceWasLost(st *subtreepkg.Subtree) bool {
 	q.mu.Lock()
@@ -388,7 +406,7 @@ func (q *StoreQueue) dropLocked(match func(*storeItem) bool) (dropped []*storeIt
 		it.done = true
 		it.dropped = true
 
-		if !it.req.AnnounceOnly && (!it.req.SkipNotification || (it.ann != nil && !it.ann.claimed)) {
+		if it.wouldAnnounce() {
 			q.noteAnnounceLost(*it.req.Subtree.RootHash())
 		}
 
@@ -511,10 +529,14 @@ func (q *StoreQueue) settled(it *storeItem, ok bool) (announce bool) {
 		announce = true
 	}
 
-	// a request told to announce that failed for good takes the announcement with it: the subtree
-	// is sent again by the stored-prefix watch, which asks announceWasLost
-	if !ok && it.ann != nil && !it.ann.claimed && !it.req.AnnounceOnly {
+	// a request that would have announced and failed for good takes the announcement with it: the
+	// subtree is sent again by the stored-prefix watch, which asks announceWasLost. One that stored
+	// announces it, which a sibling's earlier failure must not have the watch do again.
+	switch {
+	case !ok && it.wouldAnnounce():
 		q.noteAnnounceLost(*it.req.Subtree.RootHash())
+	case ok && (announce || (!it.req.AnnounceOnly && !it.req.SkipNotification)):
+		delete(q.announceLost, *it.req.Subtree.RootHash())
 	}
 
 	if it.charged {
@@ -576,6 +598,15 @@ func (r NewSubtreeRequest) Answered(err error) {
 // SettledFunc is the request's settle hook, or nil without a queue, so a request that has none costs a
 // holder of it nothing. It takes whether the store succeeded and reports whether to announce.
 func (r NewSubtreeRequest) SettledFunc() func(ok bool) bool { return r.settled }
+
+// Failing is called when the request's store has ended failed for good, before the failure is
+// published to the stored set and before Settled: a watch that sees the failure must find the lost
+// announcement recorded. Without a queue it does nothing.
+func (r NewSubtreeRequest) Failing() {
+	if r.failing != nil {
+		r.failing()
+	}
+}
 
 // Settled is called when the request's store is settled without success (tests, aborted paths): the
 // queue stops counting its bytes. Without a queue it does nothing.
