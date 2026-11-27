@@ -170,7 +170,7 @@ Progress: `for f in microservicesReconciliationFixList.md; do d=$(grep -c '^- \[
 
 - [x] Enumerate validator option proto fields and assert each is listed in
       `nonDefaultValidationOptions` or exempt — replaces a fragile manual contract (§16, Q10)
-      — already on main as of the B-022 fix itself (upstream #1781):
+      — already on main as of the HTTP options guard fix itself (upstream #1781):
       `http_options_guard_descriptor_test.go` walks the proto descriptor, sets every
       wire field non-default (handling add_tx_to_block_assembly's inverted default),
       demands the guard name it, and pins the covered-field count so the walk cannot

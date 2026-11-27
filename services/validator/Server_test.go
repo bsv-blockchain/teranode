@@ -6,6 +6,7 @@ import (
 	"encoding/hex"
 	"net/http"
 	"net/http/httptest"
+	"runtime"
 	"testing"
 	"time"
 
@@ -631,4 +632,108 @@ func TestHandleKafkaTxMessage_EarlyHeldShedIsNotInvalidAndCountedOnce(t *testing
 	for _, line := range logger.lines {
 		require.NotContains(t, line, "Invalid tx", "no per-message invalid-tx line for a held shed")
 	}
+}
+
+// declaredHugeScriptTx is a 46-byte transaction whose only input declares an
+// unlocking script just under go-bt's 1 GiB cap and then ends. A parser that
+// allocates the declared length before reading turns these bytes into a 1 GiB
+// allocation.
+func declaredHugeScriptTx() []byte {
+	tx := []byte{0x01, 0x00, 0x00, 0x00, 0x01}    // version, one input
+	tx = append(tx, make([]byte, 36)...)          // previous outpoint
+	tx = append(tx, 0xfe, 0xff, 0xff, 0xff, 0x3f) // script length (1<<30)-1, then nothing
+
+	return tx
+}
+
+// allocatedDuring reports the bytes allocated while fn runs.
+func allocatedDuring(fn func()) uint64 {
+	var before, after runtime.MemStats
+
+	runtime.GC()
+	runtime.ReadMemStats(&before)
+
+	fn()
+
+	runtime.ReadMemStats(&after)
+
+	return after.TotalAlloc - before.TotalAlloc
+}
+
+// TestIngestion_DeclaredScriptLengthIsNotAllocated sends the same short
+// transaction declaring a near-1-GiB script through every validator ingestion
+// path. Each must reject it without allocating the declared length and without
+// reaching validation. The bound is far above what a handler allocates and far
+// below the gigabyte the declaration asks for.
+func TestIngestion_DeclaredScriptLengthIsNotAllocated(t *testing.T) {
+	initPrometheusMetrics()
+
+	const bound = 64 << 20
+
+	ctx := context.Background()
+	raw := declaredHugeScriptTx()
+
+	validated := 0
+	server := &Server{
+		logger: &ulogger.TestLogger{},
+		validator: &MockValidator{
+			ValidateFunc: func(context.Context, *bt.Tx) (*meta.Data, error) {
+				validated++
+				return &meta.Data{}, nil
+			},
+		},
+		settings:   test.CreateBaseTestSettings(t),
+		httpServer: echo.New(),
+	}
+
+	e := echo.New()
+
+	t.Run("kafka", func(t *testing.T) {
+		msg := kafkaTxMessageFor(t, raw)
+
+		var err error
+
+		allocated := allocatedDuring(func() { err = server.handleKafkaTxMessage(ctx, msg) })
+
+		require.Error(t, err)
+		require.Less(t, allocated, uint64(bound))
+	})
+
+	t.Run("grpc", func(t *testing.T) {
+		req := &validator_api.ValidateTransactionRequest{TransactionData: raw}
+
+		var (
+			resp *validator_api.ValidateTransactionResponse
+			err  error
+		)
+
+		allocated := allocatedDuring(func() { resp, err = server.ValidateTransaction(ctx, req) })
+
+		require.Error(t, err)
+		require.False(t, resp.GetValid())
+		require.Less(t, allocated, uint64(bound))
+	})
+
+	for _, tc := range []struct {
+		path    string
+		handler echo.HandlerFunc
+	}{
+		{path: "/tx", handler: server.handleSingleTx(ctx)},
+		{path: "/txs", handler: server.handleMultipleTx(ctx)},
+	} {
+		t.Run("http"+tc.path, func(t *testing.T) {
+			rec := httptest.NewRecorder()
+			c := e.NewContext(httptest.NewRequest(http.MethodPost, tc.path, bytes.NewReader(raw)), rec)
+
+			var err error
+
+			allocated := allocatedDuring(func() { err = tc.handler(c) })
+
+			require.NoError(t, err)
+			require.GreaterOrEqual(t, rec.Code, http.StatusBadRequest, rec.Body.String())
+			require.Less(t, allocated, uint64(bound))
+		})
+	}
+
+	require.Zero(t, validated, "a transaction that does not parse must not reach validation")
 }

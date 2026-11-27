@@ -15,7 +15,7 @@ import (
 // by hand, a second copy of what optionsFromValidateRequest already lists, with no
 // compile-time link to the proto. It is complete today; the next field wired into
 // the projection without a matching branch here becomes a silent hole in the
-// guard — the same hole issue 4840 exists to close.
+// guard — the same hole the guard exists to close.
 //
 // So walk the descriptor instead of trusting a list: for every wire-settable field
 // except the transaction payload, set it to a non-default value and require the

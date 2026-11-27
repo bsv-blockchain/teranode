@@ -1963,7 +1963,6 @@ func (v *Validator) precheckTransaction(tx *bt.Tx, txID string, blockHeight uint
 	// The condition is `>`, mirroring the caller-asserted guard immediately above it, so it also
 	// admits a tip exactly at the highest checkpoint — a case for which the paragraph above claims
 	// no legitimate producer.
-	// Issue 4840, finding B-022.
 	if validationOptions.OutpointOnlySpend && blockState.Height > blockchain.HighestCheckpointHeight(v.settings.ChainCfgParams.Checkpoints) {
 		return errors.NewProcessingError("[Validate][%s] OutpointOnlySpend must not be used once the node's chain tip is past the highest checkpoint (tip height %d)", txID, blockState.Height)
 	}

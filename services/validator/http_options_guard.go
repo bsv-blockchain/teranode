@@ -29,7 +29,7 @@ import (
 // MAINTENANCE CONTRACT: every field of ValidateTransactionRequest that can change
 // validation behaviour must appear below. A new field on the proto message must be
 // added here in the same change, or it becomes a silent hole in this guard — the
-// same hole issue 4840 (finding B-022) exists to close. The only fields deliberately
+// same hole this guard exists to close. The only fields deliberately
 // absent are TransactionData, which is the payload this transport exists to carry,
 // and the protobuf-internal bookkeeping fields.
 func nonDefaultValidationOptions(req *validator_api.ValidateTransactionRequest) string {
@@ -37,7 +37,7 @@ func nonDefaultValidationOptions(req *validator_api.ValidateTransactionRequest) 
 		return ""
 	}
 
-	// An asserted height is the attacker's lever in B-022: it satisfies the
+	// An asserted height is the attacker's lever: it satisfies the
 	// below-checkpoint guard by construction. Zero makes the validator derive the
 	// height from its own chain state.
 	if req.BlockHeight != 0 {

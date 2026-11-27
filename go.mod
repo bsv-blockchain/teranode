@@ -398,12 +398,12 @@ require (
 	github.com/bsv-blockchain/go-batcher/v2 v2.0.6
 	github.com/bsv-blockchain/go-bc v1.2.0
 	github.com/bsv-blockchain/go-bn v1.2.0
-	github.com/bsv-blockchain/go-bt/v2 v2.7.4
+	github.com/bsv-blockchain/go-bt/v2 v2.7.6
 	github.com/bsv-blockchain/go-chaincfg v1.6.2
 	github.com/bsv-blockchain/go-lockfree-queue v1.0.0
 	github.com/bsv-blockchain/go-p2p-message-bus v0.3.1
 	github.com/bsv-blockchain/go-safe-conversion v1.2.0
-	github.com/bsv-blockchain/go-sdk v1.7.3
+	github.com/bsv-blockchain/go-sdk v1.7.4
 	github.com/bsv-blockchain/go-subtree v1.6.4
 	github.com/bsv-blockchain/go-tx-map v1.5.1
 	github.com/bsv-blockchain/go-wire v1.5.0

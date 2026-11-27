@@ -533,7 +533,7 @@ Recorded because the comment states the opposite of the behaviour, and the numbe
 
 **Security finding, fixed in layers, with the residual written down by the fix itself.**
 
-Issue 4840, finding B-022. The validator's HTTP `/tx` endpoint installs no authentication
+The validator's HTTP `/tx` endpoint installs no authentication
 middleware (`services/validator/http_options_guard.go:5-7`), and until recently a caller
 posting there could set the same options an internal service can: skip script validation, skip
 policy checks, spend by outpoint without a hash check, suppress metadata publication, claim
@@ -567,7 +567,7 @@ Two things worth surfacing for anyone reading the guide's Validator section:
 - **The fix has a maintenance contract, and it is the fragile part.** Every
     behaviour-changing field of the request must be listed in `nonDefaultValidationOptions`;
     a new proto field that skips the listing "becomes a silent hole in this guard — the same
-    hole issue 4840 (finding B-022) exists to close". Nothing in the build enforces that
+    hole this guard exists to close". Nothing in the build enforces that
     listing.
 
 Also recorded because it is the kind of detail that surprises integrators: the legacy

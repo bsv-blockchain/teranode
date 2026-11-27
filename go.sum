@@ -137,8 +137,8 @@ github.com/bsv-blockchain/go-bc v1.2.0 h1:6VDbUHyi4ZAQHzTi1Xzv562SHyvfTVnRYx4bVN
 github.com/bsv-blockchain/go-bc v1.2.0/go.mod h1:G8MZVVmGegvSogql+7N7DVwC7GvxJEk8PIjqPP5/mOE=
 github.com/bsv-blockchain/go-bn v1.2.0 h1:zgzpIFoVJMQ2OHiD5ZOZ9pRNT5s+NtAFEUQ7d1YENSg=
 github.com/bsv-blockchain/go-bn v1.2.0/go.mod h1:+odp1U5virtDVraXBNpkBUaI1DE7zD3Mot62HUzcjzc=
-github.com/bsv-blockchain/go-bt/v2 v2.7.4 h1:n2cv7uMXpCHB0so+acLoqbBo4Nk/G2IRq+IxHbyoRN8=
-github.com/bsv-blockchain/go-bt/v2 v2.7.4/go.mod h1:FpGySPAZ0c4dR4Cfal1LEWOCVN6daPQbGcqeQkXInqw=
+github.com/bsv-blockchain/go-bt/v2 v2.7.6 h1:HeBZIDTUYa3lxOdbIyIPzI33Ly85veS+ylHNNuaF1+E=
+github.com/bsv-blockchain/go-bt/v2 v2.7.6/go.mod h1:/lrTpoMtYLyK5r+VBf1Lb3uED1D2p9IEf5AngesnUE8=
 github.com/bsv-blockchain/go-chaincfg v1.6.2 h1:BoBm2eLvXioMyf39B5A6LxhddmTV/9VYArbzIr1KEJM=
 github.com/bsv-blockchain/go-chaincfg v1.6.2/go.mod h1:tmKOKZkvIZNhh5GwpcrKTYTXLac1+IGpSFRMSZt/8Gc=
 github.com/bsv-blockchain/go-lockfree-queue v1.0.0 h1:rizOsTImw2Gk/iSTQRHqB+2OcJWBl5qN6pbIHqDWxRw=
@@ -147,8 +147,8 @@ github.com/bsv-blockchain/go-p2p-message-bus v0.3.1 h1:qb1Y9NNe0uud+GBxAaBbdX73/
 github.com/bsv-blockchain/go-p2p-message-bus v0.3.1/go.mod h1:6hX14TBGIEnfPJtN5nh97EzRD3VzhatkJnuReeVjBkg=
 github.com/bsv-blockchain/go-safe-conversion v1.2.0 h1:HwLWaxqm2OyU5/2BRQ8kwdn25QyX2HXr0JkfSyTG3DU=
 github.com/bsv-blockchain/go-safe-conversion v1.2.0/go.mod h1:62Eq2980j4BygfqJhd/ObGRHET8ubEy2rBdGi4k6nsw=
-github.com/bsv-blockchain/go-sdk v1.7.3 h1:U4NuOoJcn3NPgzGyc0GPrGQygya6stRDxlfJC8ksUx0=
-github.com/bsv-blockchain/go-sdk v1.7.3/go.mod h1:hLPo1JjumHrtPrRwwVMO1y5ukIUx7+CzkelDxDm+7H4=
+github.com/bsv-blockchain/go-sdk v1.7.4 h1:FqeReOBYNOgUBF4/qTQqqpOrSjD8sRhTu2RIT/G8ZMc=
+github.com/bsv-blockchain/go-sdk v1.7.4/go.mod h1:JrqAZhpbJmob3+ouaXGCQPU08OBwWLxOV9rurOaVZs4=
 github.com/bsv-blockchain/go-subtree v1.6.4 h1:y9RQ54Fq1v2N0kryC69DHTmlYHKXJIcEPFM5LBxAU0A=
 github.com/bsv-blockchain/go-subtree v1.6.4/go.mod h1:okzxCUWjNdOxNec5zjpsN+J+fs276A9k0DdWwPFpik8=
 github.com/bsv-blockchain/go-tx-map v1.5.1 h1:cFvgwBNQ+51e+KGgF/tZLrEOyEknhHiNBmT965a7oec=
