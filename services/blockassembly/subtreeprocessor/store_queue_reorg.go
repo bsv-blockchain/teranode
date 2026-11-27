@@ -50,10 +50,7 @@ func (stp *SubtreeProcessor) awaitQueuedStores(ctx context.Context, caller strin
 			return errors.NewStorageError("[%s] subtree %d was not stored", caller, i)
 		}
 
-		var err error
-		if waits[i], err = stp.sendForAwait(ctx, caller, st); err != nil {
-			return err
-		}
+		waits[i] = stp.sendForAwait(st)
 	}
 
 	for i, it := range waits {
@@ -81,18 +78,17 @@ func (stp *SubtreeProcessor) awaitQueuedStores(ctx context.Context, caller strin
 
 			resent = true
 
-			if it, err = stp.sendForAwait(ctx, caller, stp.chainedSubtrees[i]); err != nil {
-				return err
-			}
+			it = stp.sendForAwait(stp.chainedSubtrees[i])
 		}
 	}
 
 	return nil
 }
 
-// sendForAwait sends st to the store, silently, for a reorg that waits for it.
-func (stp *SubtreeProcessor) sendForAwait(ctx context.Context, caller string, st *subtreepkg.Subtree) (*storeItem, error) {
-	if err := stp.sendNewSubtree(ctx, NewSubtreeRequest{
+// sendForAwait sends st to the store, silently, for a reorg that waits for it, and returns the
+// request it sent: a lookup after the send could miss a request a worker already settled.
+func (stp *SubtreeProcessor) sendForAwait(st *subtreepkg.Subtree) *storeItem {
+	return stp.storeQueue.Push(NewSubtreeRequest{
 		Subtree:           st,
 		ParentTxMap:       stp.currentTxMap,
 		superseded:        stp.supersedeToken(),
@@ -100,11 +96,7 @@ func (stp *SubtreeProcessor) sendForAwait(ctx context.Context, caller string, st
 		SkipNotification:  true,
 		ErrChan:           make(chan error, 1),
 		OnStorageComplete: func() { stp.cleanupDeletedTxs(st) },
-	}); err != nil {
-		return nil, errors.NewProcessingError("[%s] context cancelled while sending subtree", caller, err)
-	}
-
-	return stp.storeQueue.entry(st), nil
+	})
 }
 
 // awaitOne waits for one request and reports whether the queue dropped it instead.
@@ -131,7 +123,8 @@ func (stp *SubtreeProcessor) awaitOne(ctx context.Context, caller string, i int,
 	}
 
 	select {
-	case r := <-it.result:
+	case <-it.finished:
+		r := it.final
 		if r.Cancelled && stp.storeQueue.wasDropped(it) {
 			return true, nil
 		}

@@ -120,7 +120,10 @@ func answerFromQueue(req NewSubtreeRequest, set *StoredSet, res StoreResult) {
 	}
 
 	req.Answered(nil)
-	req.Settled()
+
+	if settled := req.SettledFunc(); settled != nil {
+		settled(res)
+	}
 }
 
 // bySeq is what the workers took, in sequence order.
@@ -735,7 +738,7 @@ func TestStoreQueue_ASubtreeStillBeingStoredIsNotSentAgain(t *testing.T) {
 
 	first, _, ok := q.Take(ctx)
 	require.True(t, ok)
-	require.True(t, first.SettledFunc()(true), "and it announces once it is stored, though the forward step sent it silently")
+	require.True(t, first.SettledFunc()(StoreResult{SubtreeStored: true, MetaNotApplicable: true}), "and it announces once it is stored, though the forward step sent it silently")
 
 	stp.sendChainedSubtreeAgain(1, chainRoot(stp, 1), time.Now())
 	require.Equal(t, before-1, q.Len(), "the watch did not send a queued subtree again")
@@ -907,6 +910,74 @@ func TestStoreQueue_TheOlderOfTwoRequestsForASubtreeAnnouncesOnce(t *testing.T) 
 	second, _, ok := q.Take(ctx)
 	require.True(t, ok)
 
-	require.True(t, first.SettledFunc()(true), "the older request stored it: it announces")
-	require.False(t, second.SettledFunc()(true), "the newer one stays silent")
+	require.True(t, first.SettledFunc()(StoreResult{SubtreeStored: true, MetaNotApplicable: true}), "the older request stored it: it announces")
+	require.False(t, second.SettledFunc()(StoreResult{SubtreeStored: true, MetaNotApplicable: true}), "the newer one stays silent")
+}
+
+// A worker that settles a failed store before the reorg looks for the request must still fail the
+// reorg: Push hands the reorg its request, which a second lookup could miss.
+func TestStoreQueue_AFailedStoreThatSettledBeforeTheReorgLookedFailsItWithADeadline(t *testing.T) {
+	q := NewStoreQueue(1 << 40)
+	stp, _ := newStoredPrefixProcessor(t, 8, NewStoredSet(), func(stp *SubtreeProcessor) { stp.storeQueue = q })
+
+	req := chainRequest(t, 1)
+	req.Result = make(chan StoreResult, 1)
+	it := q.Push(req)
+
+	taken, _, ok := q.Take(t.Context())
+	require.True(t, ok)
+
+	failed := StoreResult{Err: errors.NewStorageError("write failed")}
+	taken.Result <- failed
+	taken.SettledFunc()(failed)
+
+	require.Nil(t, q.entry(req.Subtree), "the lookup misses a request that settled")
+
+	timer := time.NewTimer(time.Minute)
+	defer timer.Stop()
+
+	_, err := stp.awaitOne(t.Context(), "test", 0, it, time.Minute, timer.C)
+	require.ErrorContains(t, err, "was not stored")
+}
+
+// The stored-prefix watcher drains a request's Result channel; the reorg waiting for the same request
+// must not depend on it, and must not take the value the watcher needs.
+func TestStoreQueue_AReorgAndTheWatcherBothSeeTheResultOfOneRequest(t *testing.T) {
+	q := NewStoreQueue(1 << 40)
+	stp, _ := newStoredPrefixProcessor(t, 8, NewStoredSet(), func(stp *SubtreeProcessor) { stp.storeQueue = q })
+
+	req := chainRequest(t, 1)
+	req.Result = make(chan StoreResult, 1)
+	it := q.Push(req)
+
+	taken, _, ok := q.Take(t.Context())
+	require.True(t, ok)
+
+	failed := StoreResult{Err: errors.NewStorageError("write failed")}
+	taken.Result <- failed
+
+	require.Equal(t, failed, <-req.Result, "the watcher drains it after the post, before the settle")
+
+	taken.SettledFunc()(failed)
+
+	timer := time.NewTimer(time.Minute)
+	defer timer.Stop()
+
+	_, err := stp.awaitOne(t.Context(), "test", 0, it, time.Minute, timer.C)
+	require.ErrorContains(t, err, "was not stored", "the reorg still learns the outcome")
+
+	req2 := chainRequest(t, 2)
+	req2.Result = make(chan StoreResult, 1)
+	it2 := q.Push(req2)
+
+	taken2, _, ok := q.Take(t.Context())
+	require.True(t, ok)
+
+	stored := StoreResult{SubtreeStored: true, MetaNotApplicable: true}
+	taken2.Result <- stored
+	taken2.SettledFunc()(stored)
+
+	_, err = stp.awaitOne(t.Context(), "test", 0, it2, time.Minute, timer.C)
+	require.NoError(t, err)
+	require.Equal(t, stored, <-req2.Result, "the reorg left the value for the watcher")
 }

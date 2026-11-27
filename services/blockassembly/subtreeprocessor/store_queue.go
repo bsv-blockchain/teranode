@@ -90,10 +90,15 @@ type storeItem struct {
 	taken   bool           // a worker has it
 	ann     *announceState // set by AnnounceOnSuccess, shared by the requests of one subtree; under the queue's lock
 
-	// first is closed once ErrChan was answered, with the error in firstErr; result is the request's
-	// Result. A reorg that finds its subtree already sent waits on these instead of sending it again.
+	// first is closed once ErrChan was answered, with the error in firstErr; finished is closed once
+	// the request settled or was dropped, with its outcome in final. A reorg that finds its subtree
+	// already sent waits on these instead of sending it again. They are read by any number of waiters,
+	// unlike result, the request's own Result, which holds one value for one reader (the stored-prefix
+	// watcher drains it).
 	first    chan struct{}
 	firstErr error
+	finished chan struct{}
+	final    StoreResult
 	result   chan StoreResult
 }
 
@@ -102,9 +107,10 @@ func NewStoreQueue(maxBytes uint64) *StoreQueue {
 	return &StoreQueue{limit: maxBytes, wake: make(chan struct{}), byTree: make(map[*subtreepkg.Subtree][]*storeItem)}
 }
 
-// Push hands a request to the queue. It never blocks.
-func (q *StoreQueue) Push(req NewSubtreeRequest) {
-	it := &storeItem{bytes: StoreRequestBytes(req), first: make(chan struct{})}
+// Push hands a request to the queue and returns its item, for a caller that waits for this request
+// and not for whichever one is the subtree's newest. It never blocks.
+func (q *StoreQueue) Push(req NewSubtreeRequest) *storeItem {
+	it := &storeItem{bytes: StoreRequestBytes(req), first: make(chan struct{}), finished: make(chan struct{})}
 
 	if req.Result == nil && !req.AnnounceOnly {
 		req.Result = make(chan StoreResult, 1)
@@ -112,7 +118,7 @@ func (q *StoreQueue) Push(req NewSubtreeRequest) {
 
 	it.result = req.Result
 	req.answered = func(err error) { q.answered(it, err) }
-	req.settled = func(ok bool) bool { return q.settled(it, ok) }
+	req.settled = func(res StoreResult) bool { return q.settled(it, res) }
 	it.req = req
 
 	q.mu.Lock()
@@ -140,6 +146,8 @@ func (q *StoreQueue) Push(req NewSubtreeRequest) {
 	q.mu.Unlock()
 
 	finishDropped(dropped)
+
+	return it
 }
 
 // Take returns the next request and its sequence number, waiting until there is one. It reports
@@ -331,8 +339,10 @@ func (q *StoreQueue) dropLocked(match func(*storeItem) bool) (dropped []*storeIt
 	for _, it := range dropped {
 		it.done = true
 		it.dropped = true
+		it.final = StoreResult{Cancelled: true, Err: errors.NewStorageError("store request dropped: its subtree left the chain")}
 		q.unregisterLocked(it)
 		close(it.first)
+		close(it.finished)
 
 		if it.req.OnStorageComplete != nil {
 			q.cleanups = append(q.cleanups, it.req.OnStorageComplete)
@@ -431,10 +441,10 @@ func (q *StoreQueue) answered(it *storeItem, err error) {
 }
 
 // settled ends the request's charge, and admits what now fits. It reports whether the request was
-// stored (ok) and was told to announce its subtree (AnnounceOnSuccess): the caller announces it, and
+// stored (res.OK()) and was told to announce its subtree (AnnounceOnSuccess): the caller announces it, and
 // since the flag is claimed and the request unregistered under one lock, a request is announced either
 // here or by the announce-only request of a reorg that found it stored, never both or neither.
-func (q *StoreQueue) settled(it *storeItem, ok bool) (announce bool) {
+func (q *StoreQueue) settled(it *storeItem, res StoreResult) (announce bool) {
 	q.mu.Lock()
 
 	if it.done {
@@ -444,8 +454,10 @@ func (q *StoreQueue) settled(it *storeItem, ok bool) (announce bool) {
 	}
 
 	it.done = true
+	it.final = res
+	close(it.finished)
 
-	if ok && it.ann != nil && !it.ann.claimed {
+	if res.OK() && it.ann != nil && !it.ann.claimed {
 		it.ann.claimed = true
 		announce = true
 	}
@@ -472,7 +484,7 @@ func finishDropped(dropped []*storeItem) {
 	for _, it := range dropped {
 		if it.result != nil {
 			select {
-			case it.result <- StoreResult{Cancelled: true, Err: errors.NewStorageError("store request dropped: its subtree left the chain")}:
+			case it.result <- it.final:
 			default:
 			}
 		}
@@ -507,13 +519,13 @@ func (r NewSubtreeRequest) Answered(err error) {
 }
 
 // SettledFunc is the request's settle hook, or nil without a queue, so a request that has none costs a
-// holder of it nothing. It takes whether the store succeeded and reports whether to announce.
-func (r NewSubtreeRequest) SettledFunc() func(ok bool) bool { return r.settled }
+// holder of it nothing. It takes the request's final result and reports whether to announce.
+func (r NewSubtreeRequest) SettledFunc() func(res StoreResult) bool { return r.settled }
 
 // Settled is called when the request's store is settled without success (tests, aborted paths): the
 // queue stops counting its bytes. Without a queue it does nothing.
 func (r NewSubtreeRequest) Settled() {
 	if r.settled != nil {
-		r.settled(false)
+		r.settled(StoreResult{Err: errors.NewStorageError("store request settled without a result")})
 	}
 }
