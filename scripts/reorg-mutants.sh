@@ -13,7 +13,7 @@
 #
 # Usage: scripts/reorg-mutants.sh [test regex]
 #   REORG_MUTANT_TESTS  test regex (default: the reorg scenario, oracle and
-#                       differential tests)
+#                       differential tests, and the supersede-before-clear pin)
 set -euo pipefail
 shopt -s nullglob
 
@@ -22,7 +22,7 @@ cd "$repo_root"
 
 pkg=./services/blockassembly/subtreeprocessor
 mutant_dir=services/blockassembly/subtreeprocessor/testdata/mutants
-tests=${1:-${REORG_MUTANT_TESTS:-^(TestReorgScenario|TestReorgDifferential|TestOrderOracle)}}
+tests=${1:-${REORG_MUTANT_TESTS:-^(TestReorgScenario|TestReorgDifferential|TestOrderOracle|TestResetSupersedes)}}
 
 run_tests() {
 	go test -count=1 -tags testtxmetacache -run "$tests" "$pkg" >/dev/null 2>&1
