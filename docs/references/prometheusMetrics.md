@@ -490,6 +490,7 @@ CounterVec metrics use labels: `function` (function name), `error` (error type).
 | `teranode_subtreeprocessor_transaction_map_duration`     | Histogram | Duration of creating transaction map in subtree processor         |
 | `teranode_subtreeprocessor_remove_tx`                    | Histogram | Duration of removing tx in subtree processor                      |
 | `teranode_subtreeprocessor_reset`                        | Histogram | Duration of resetting subtree processor                           |
+| `teranode_subtreeprocessor_reorg_tip_to_start_seconds`    | Histogram | Time from the start of the block-announcement pass behind a fork reorg to the processor starting it, the processor's queue wait included. One pass can run several moves, so a fork reorg after an earlier catch-up or reset in the same pass also counts that earlier work. Not a phase of `reorg_phase_seconds`: those add up to the reorg's own total, and this wait comes before it |
 | `teranode_subtreeprocessor_dynamic_subtree_size`         | Gauge     | Size of the dynamic subtree in the subtree processor              |
 | `teranode_subtreeprocessor_blockmaxsize_resizes`         | Counter   | Number of times the queued subtrees were re-chunked because the first one exceeded `blockmaxsize`. A resize lasts for one block, so a count that rises every block means the queue is rebuilt and stored again each block |
 | `teranode_subtreeprocessor_current_state`                | Gauge     | Current state of the subtree processor                           |

@@ -15,10 +15,12 @@ import (
 // observed each time.
 //
 // The counts of a fork reorg's summary line come in the order they are recorded: tip_to_start_ms
-// (only when the request carries when block assembly saw the tip change), pending, tx_map, queue;
-// then for each forward step remainder, hits, last_hit_position (-1 when the block mined none of
-// the nodes held), drain_queue (unless the step skips the drain) and d2; then mark_true and
-// mark_false. A count that repeats appears once per forward step, in step order.
+// (only when the request carries when the announcement pass started), pending, tx_map, queue;
+// then for each forward step: remainder, hits, last_hit_position (-1 when none of the nodes the
+// block mined is among them) and drain_queue (unless the step skips the drain), all four only when
+// the step's block mined a transaction block assembly holds, then d2, recorded on every step; then
+// mark_true and mark_false. A step whose block mined none logs d2 alone, so match d2 to steps by
+// position, not the other counts.
 //
 // While such an operation runs, the processor holds its timer in stp.phases, so the steps it calls
 // (moveForwardBlock, the remainder pass) report their sub-phases without new parameters. Outside one
@@ -112,9 +114,9 @@ func (stp *SubtreeProcessor) startPhases(op string) (finish func()) {
 }
 
 // reportTipToStart records how long the request that started this reorg waited, from block
-// assembly first seeing the tip change (the processor's queue wait included) to now: the
-// tip_to_start_ms count and an observation of reorg_tip_to_start_seconds. A request that did not
-// say when the tip was seen reports nothing.
+// assembly starting the announcement pass behind it (the processor's queue wait included, and any
+// earlier move in the same pass) to now: the tip_to_start_ms count and an observation of
+// reorg_tip_to_start_seconds. A request that did not say when the pass started reports nothing.
 func (stp *SubtreeProcessor) reportTipToStart() {
 	if stp.reorgTipSeenAt.IsZero() {
 		return
