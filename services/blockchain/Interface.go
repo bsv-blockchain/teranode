@@ -116,6 +116,11 @@ type ClientI interface {
 	// shadow load them into their index.
 	LaneMapRows(ctx context.Context, blockID uint32) ([]lane.MapRow, error)
 
+	// InsertLaneMapRows stores the lane map rows of a block already stored, under the ID the store
+	// gave it. It is insert-only: rows that say what is stored write nothing, rows that differ
+	// fail, and a block that is not stored, or is stored as invalid, takes none.
+	InsertLaneMapRows(ctx context.Context, blockHash *chainhash.Hash, rows []lane.MapRow) error
+
 	// LaneCapGrants returns, for each lane with one, the first grant handed out at or above height,
 	// by lane. Block assembly's restart dry run at utxostore_laneMigration shadow starts its window
 	// there.

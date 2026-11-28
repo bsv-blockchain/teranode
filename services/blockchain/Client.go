@@ -550,6 +550,15 @@ func (c *Client) LaneMapRows(ctx context.Context, blockID uint32) ([]lane.MapRow
 	return laneMapRowsFromProto(resp.GetRows())
 }
 
+// InsertLaneMapRows stores the lane map rows of a block already stored.
+func (c *Client) InsertLaneMapRows(ctx context.Context, blockHash *chainhash.Hash, rows []lane.MapRow) error {
+	if _, err := c.client.InsertLaneMapRows(ctx, &blockchain_api.InsertLaneMapRowsRequest{BlockHash: blockHash[:], Rows: laneMapRowsToProto(rows)}); err != nil {
+		return errors.UnwrapGRPC(err)
+	}
+
+	return nil
+}
+
 // LaneCapGrants returns, for each lane with one, the first grant handed out at or above height.
 func (c *Client) LaneCapGrants(ctx context.Context, height uint32) ([]lane.CapGrant, error) {
 	resp, err := c.client.GetLaneCapGrants(ctx, &blockchain_api.GetLaneCapGrantsRequest{Height: height})

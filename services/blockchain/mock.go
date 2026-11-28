@@ -698,6 +698,13 @@ func (m *Mock) LaneMapRows(ctx context.Context, blockID uint32) ([]lane.MapRow, 
 	return rows, args.Error(1)
 }
 
+// InsertLaneMapRows mocks the InsertLaneMapRows method
+func (m *Mock) InsertLaneMapRows(ctx context.Context, blockHash *chainhash.Hash, rows []lane.MapRow) error {
+	args := m.Called(ctx, blockHash, rows)
+
+	return args.Error(0)
+}
+
 // LaneCapGrants mocks the LaneCapGrants method
 func (m *Mock) LaneCapGrants(ctx context.Context, height uint32) ([]lane.CapGrant, error) {
 	args := m.Called(ctx, height)

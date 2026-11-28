@@ -829,6 +829,9 @@ func (m *MockBlockchainClient) ReleaseLaneLease(ctx context.Context, r lane.Rele
 func (m *MockBlockchainClient) LaneMapRows(context.Context, uint32) ([]lane.MapRow, error) {
 	return nil, nil
 }
+func (m *MockBlockchainClient) InsertLaneMapRows(context.Context, *chainhash.Hash, []lane.MapRow) error {
+	return nil
+}
 func (m *MockBlockchainClient) LaneCapGrants(context.Context, uint32) ([]lane.CapGrant, error) {
 	return nil, nil
 }

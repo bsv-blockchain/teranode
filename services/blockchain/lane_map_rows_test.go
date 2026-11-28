@@ -270,6 +270,10 @@ func (c *laneRowsServer) GetLaneMapRows(ctx context.Context, in *blockchain_api.
 	return c.server.GetLaneMapRows(ctx, in)
 }
 
+func (c *laneRowsServer) InsertLaneMapRows(ctx context.Context, in *blockchain_api.InsertLaneMapRowsRequest, _ ...grpc.CallOption) (*emptypb.Empty, error) {
+	return c.server.InsertLaneMapRows(ctx, in)
+}
+
 // A reader reads back the rows AddBlock stored, through the server and a client, and nothing for a
 // block without rows.
 func TestGetLaneMapRowsReturnsTheRowsStoredWithTheBlock(t *testing.T) {
@@ -296,4 +300,86 @@ func TestGetLaneMapRowsReturnsTheRowsStoredWithTheBlock(t *testing.T) {
 	got, err = c.LaneMapRows(context.Background(), meta.ID+1_000)
 	require.NoError(t, err)
 	require.Empty(t, got)
+}
+
+// A block stored without rows takes them later under the ID it was stored with, through a client
+// and the server or a local client. The same rows again write nothing, other rows are refused, and
+// a block not stored, or stored as invalid, takes none.
+func TestInsertLaneMapRowsStoresTheRowsOfAStoredBlock(t *testing.T) {
+	rows := []lane.MapRow{{Lane: 7, First: 1, Last: 9, Tag: lane.RowTagRange}}
+	other := []lane.MapRow{{Lane: 7, First: 1, Last: 10, Tag: lane.RowTagRange}}
+
+	for _, local := range []bool{false, true} {
+		t.Run(fmt.Sprintf("local=%t", local), func(t *testing.T) {
+			tc := setup(t)
+			blk := mockBlock(tc, t)
+			ctx := context.Background()
+
+			var c ClientI = &Client{client: &laneRowsServer{server: tc.server}, logger: tc.logger}
+
+			if local {
+				lc, err := NewLocalClient(tc.logger, tc.server.settings, tc.server.store, nil, nil)
+				require.NoError(t, err)
+
+				c = lc
+			}
+
+			require.Error(t, c.InsertLaneMapRows(ctx, blk.Hash(), rows), "a block not stored takes no rows")
+
+			_, _, err := tc.server.store.StoreBlock(ctx, blk, "peer")
+			require.NoError(t, err)
+
+			_, meta, err := tc.server.store.GetBlockHeader(ctx, blk.Hash())
+			require.NoError(t, err)
+
+			require.NoError(t, c.InsertLaneMapRows(ctx, blk.Hash(), rows))
+			require.NoError(t, c.InsertLaneMapRows(ctx, blk.Hash(), rows), "the same rows again write nothing")
+			require.Error(t, c.InsertLaneMapRows(ctx, blk.Hash(), other), "other rows are refused")
+
+			got, err := tc.server.store.LaneMapRows(ctx, meta.ID)
+			require.NoError(t, err)
+			require.Equal(t, rows, got)
+		})
+	}
+
+	t.Run("a block stored as invalid", func(t *testing.T) {
+		tc := setup(t)
+		blk := mockBlock(tc, t)
+		ctx := context.Background()
+
+		_, _, err := tc.server.store.StoreBlock(ctx, blk, "peer", options.WithInvalid(true))
+		require.NoError(t, err)
+
+		_, err = tc.server.InsertLaneMapRows(ctx, &blockchain_api.InsertLaneMapRowsRequest{BlockHash: blk.Hash()[:], Rows: laneMapRowsToProto(rows)})
+		require.Error(t, err)
+
+		_, meta, err := tc.server.store.GetBlockHeader(ctx, blk.Hash())
+		require.NoError(t, err)
+
+		got, err := tc.server.store.LaneMapRows(ctx, meta.ID)
+		require.NoError(t, err)
+		require.Empty(t, got)
+	})
+
+	t.Run("a request that does not parse", func(t *testing.T) {
+		tc := setup(t)
+		blk := mockBlock(tc, t)
+		ctx := context.Background()
+
+		_, _, err := tc.server.store.StoreBlock(ctx, blk, "peer")
+		require.NoError(t, err)
+
+		_, err = tc.server.InsertLaneMapRows(ctx, &blockchain_api.InsertLaneMapRowsRequest{BlockHash: []byte{1, 2}, Rows: laneMapRowsToProto(rows)})
+		require.Error(t, err, "a hash of the wrong length")
+
+		_, err = tc.server.InsertLaneMapRows(ctx, &blockchain_api.InsertLaneMapRowsRequest{BlockHash: blk.Hash()[:], Rows: []*blockchain_api.LaneMapRow{{Lane: 256, First: 1, Last: 1}}})
+		require.Error(t, err, "a row that does not fit")
+
+		_, meta, err := tc.server.store.GetBlockHeader(ctx, blk.Hash())
+		require.NoError(t, err)
+
+		got, err := tc.server.store.LaneMapRows(ctx, meta.ID)
+		require.NoError(t, err)
+		require.Empty(t, got)
+	})
 }

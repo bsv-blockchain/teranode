@@ -377,3 +377,22 @@ func (u *BlockValidation) quickLaneRows(ctx context.Context, block *model.Block)
 // laneQuickValidationService is the service label quick validation counts its records stored
 // without a lane position under.
 const laneQuickValidationService = "blockvalidation"
+
+// quickLaneLateInsertTimeout bounds insertLaneRowsOfStoredBlock. A variable so a test can shorten it.
+var quickLaneLateInsertTimeout = 10 * time.Second
+
+// insertLaneRowsOfStoredBlock stores rows, the lane map rows this attempt built, for a block its
+// AddBlock found already stored: by this attempt, whose AddBlock then failed, or by another route,
+// which may have stored the block without rows. The insert is insert-only, so it writes the rows
+// only where the stored block has none, and rows that differ from those stored are refused and
+// counted in teranode_lane_row_insert_failures_total, as is any other failure. It runs detached
+// from ctx, as commitBlock's probe does, so a caller that has given up does not cut it short.
+func (u *BlockValidation) insertLaneRowsOfStoredBlock(ctx context.Context, block *model.Block, rows []lane.MapRow, caller string) {
+	insertCtx, cancel := context.WithTimeout(context.WithoutCancel(ctx), quickLaneLateInsertTimeout)
+	defer cancel()
+
+	if err := u.blockchainClient.InsertLaneMapRows(insertCtx, block.Hash(), rows); err != nil {
+		lane.CountRowInsertFailure(lane.BlockPeer)
+		u.logger.Warnf("[%s][%s] the block is stored without this attempt's lane map rows, whose insert after it failed: %v", caller, block.Hash().String(), err)
+	}
+}

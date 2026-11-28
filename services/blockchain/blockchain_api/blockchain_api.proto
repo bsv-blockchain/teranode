@@ -127,6 +127,9 @@ service BlockchainAPI {
   // GetLaneMapRows returns one block's lane map rows, by lane and first position (utxostore_laneMigration shadow readers).
   rpc GetLaneMapRows(GetLaneMapRowsRequest) returns (GetLaneMapRowsResponse) {}
 
+  // InsertLaneMapRows stores the lane map rows of a block already stored, insert-only (utxostore_laneMigration shadow).
+  rpc InsertLaneMapRows(InsertLaneMapRowsRequest) returns (google.protobuf.Empty) {}
+
   // GetLaneCapGrants returns, for each lane with one, the first grant handed out at or above a height (block assembly's restart window, utxostore_laneMigration shadow).
   rpc GetLaneCapGrants(GetLaneCapGrantsRequest) returns (GetLaneCapGrantsResponse) {}
 
@@ -1295,4 +1298,10 @@ message ReleaseLaneLeaseRequest {
 // ReleaseLaneLeaseResponse answers a release.
 message ReleaseLaneLeaseResponse {
   bool already_closed = 1;  // The lease was closed before this release
+}
+
+// InsertLaneMapRowsRequest is the lane map rows of a stored block, named by its hash.
+message InsertLaneMapRowsRequest {
+  bytes block_hash = 1;          // The block's hash
+  repeated LaneMapRow rows = 2;  // The block's lane map rows
 }

@@ -748,7 +748,8 @@ func (u *BlockValidation) commitBlock(ctx context.Context, block *model.Block, p
 
 	// At utxostore_laneMigration shadow the block's lane map rows, built from the positions of
 	// the records this attempt wrote or found, and stored in the block's own transaction.
-	if rows := u.quickLaneRows(ctx, block); rows != nil {
+	rows := u.quickLaneRows(ctx, block)
+	if rows != nil {
 		addOpts = append(addOpts, options.WithLaneMapRows(rows))
 	}
 
@@ -772,6 +773,10 @@ func (u *BlockValidation) commitBlock(ctx context.Context, block *model.Block, p
 			// owns the block's flags. Either way the block is stored, so a sweep is wrong and the
 			// unlock is safe. Finish the commit tail.
 			u.logger.Warnf("[%s][%s] AddBlock returned an error but the block is stored, continuing the commit: %v", caller, block.Hash().String(), err)
+
+			if rows != nil {
+				u.insertLaneRowsOfStoredBlock(ctx, block, rows, caller)
+			}
 		case ctx.Err() != nil:
 			// The block is not stored yet, but ctx ended, so the server can still be committing it.
 			// Keep the files and abort.

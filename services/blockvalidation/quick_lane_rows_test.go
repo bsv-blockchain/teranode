@@ -2,6 +2,7 @@ package blockvalidation
 
 import (
 	"context"
+	"fmt"
 	"net/url"
 	"sync/atomic"
 	"testing"
@@ -734,6 +735,57 @@ func TestQuickValidatedBlockCommit(t *testing.T) {
 		})
 		require.Equal(t, lanereader.PruneVerdict{Lanes: lanereader.PruneDelete, Reason: lanereader.ReasonSettled}, verdict)
 	})
+
+	// Full validation of the same block, finding the subtree files quick validation wrote, saves no
+	// lane bitmaps and stores the block without rows. Whichever stores it first, the block ends with
+	// its records' rows, under the ID it was stored with, and a redo changes nothing.
+	for _, fullFirst := range []bool{false, true} {
+		t.Run(fmt.Sprintf("full validation stores the block first=%t", fullFirst), func(t *testing.T) {
+			f := newQuickLaneCommitFixture(t, fmt.Sprintf("QUICK_LANE_RACE_%t", fullFirst))
+			bv, store, client, kind, layout, txs, block := f.bv, f.store, f.client, f.kind, f.layout, f.txs, f.block
+
+			bv.subtreeStore = blobmemory.New()
+
+			ctx := context.Background()
+			failures := laneMetric(t, "teranode_lane_row_insert_failures_total", "block", lane.BlockPeer)
+			absent := laneMetric(t, "teranode_lane_missing_bitmaps_total", "reason", lane.MissingBitmapsAbsent)
+
+			// Full validation's own copy of the block, with no ID: the store gives it one.
+			full := &model.Block{Header: block.Header, CoinbaseTx: block.CoinbaseTx, Subtrees: block.Subtrees, TransactionCount: block.TransactionCount, Height: block.Height}
+			storeInFull := func() error { return client.AddBlock(ctx, full, "legacy", bv.buildAddBlockOpts(ctx, full)...) }
+
+			attempt := quickValidateAttempt(t, bv, block, layout, kind, 0, len(layout))
+
+			if fullFirst {
+				require.NoError(t, storeInFull())
+			}
+
+			require.NoError(t, bv.commitBlock(attempt, block, "", "test"))
+
+			if !fullFirst {
+				require.Error(t, storeInFull(), "the block is stored already")
+			}
+
+			require.Equal(t, absent+float64(len(block.Subtrees)), laneMetric(t, "teranode_lane_missing_bitmaps_total", "reason", lane.MissingBitmapsAbsent), "full validation found no lane bitmaps")
+
+			_, meta, err := client.GetBlockHeader(ctx, block.Hash())
+			require.NoError(t, err)
+
+			want := rowsOf(t, storedLanePositions(t, store, txs))
+
+			stored, err := client.LaneMapRows(ctx, meta.ID)
+			require.NoError(t, err)
+			require.Equal(t, want, stored)
+
+			redo := quickValidateAttempt(t, bv, block, layout, kind, 0, len(layout))
+			require.NoError(t, bv.commitBlock(redo, block, "", "test"))
+
+			stored, err = client.LaneMapRows(ctx, meta.ID)
+			require.NoError(t, err)
+			require.Equal(t, want, stored, "a redo changes no row")
+			require.Equal(t, failures, laneMetric(t, "teranode_lane_row_insert_failures_total", "block", lane.BlockPeer), "no insert failed")
+		})
+	}
 
 	t.Run("a failed position read stores the block without rows", func(t *testing.T) {
 		f := newQuickLaneCommitFixture(t, "QUICK_LANE_READ_FAILS")
