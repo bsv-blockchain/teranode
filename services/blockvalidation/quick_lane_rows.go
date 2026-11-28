@@ -17,10 +17,11 @@ import (
 // Lane rows for a block stored by quick validation, at utxostore_laneMigration shadow (lanes
 // Phase 1). Full validation builds a peer block's rows from the lane bitmaps subtree validation
 // saved beside each subtree (laneRows). Quick validation runs no subtree validation, so it builds
-// them from the records it writes itself. Every record the store creates for the block comes back
-// with the lane position it was written with. A record that already existed, written by an earlier
-// attempt of the block or stored unmined before it, is read back for its position, because the
-// position the store took for this attempt was burned, not written. The rows are the ones P2
+// them from the records it writes itself. A record utxoset or Aerospike creates for the block comes
+// back with the lane position it was written with; one that comes back without a valid position, as
+// a SQL-store create does, is left out and counted. A record that already existed, written by an
+// earlier attempt of the block or stored unmined before it, is read back for its position, because
+// the position the store took for this attempt was burned, not written. The rows are the ones P2
 // builds: one Roaring bitmap per lane, turned into map rows by lane.BuildBlockRows, with the
 // coinbase left out, since block assembly creates it. A redone block reads back every record the
 // first attempt wrote, so it gets the same rows and no record a second position.

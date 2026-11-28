@@ -737,23 +737,14 @@ func BenchmarkQuickLaneRows(b *testing.B) {
 					q.addCreated(list[:n])
 				}
 
-				b.StopTimer()
+				rows := bv.quickLaneRows(ctx, block)
 
-				q.mu.Lock()
-				q.flushLocked()
+				b.StopTimer()
 
 				heap = 0
 				for _, bm := range q.lanes {
 					heap += bm.GetSizeInBytes()
 				}
-
-				q.mu.Unlock()
-
-				b.StartTimer()
-
-				rows := bv.quickLaneRows(ctx, block)
-
-				b.StopTimer()
 
 				rowBytes = 0
 				for _, r := range rows {
