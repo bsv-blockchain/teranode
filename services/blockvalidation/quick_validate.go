@@ -2609,10 +2609,15 @@ func (u *BlockValidation) createAndSpendUTXOsForBatch(ctx context.Context, block
 
 	lanes := quickLanePositionsFrom(ctx)
 
-	if applyErr == nil {
-		// They are stored without a record, so they take no lane position and the rows leave
-		// them out.
-		lanes.addNoRecord(len(unspendableTxs))
+	if applyErr == nil && len(unspendableTxs) > 0 {
+		// They are stored without a record, so they take no lane position and the rows leave them
+		// out, unless one was stored before; see readSkippedLanePositions.
+		skipped := make([]*chainhash.Hash, len(unspendableTxs))
+		for i, tx := range unspendableTxs {
+			skipped[i] = tx.TxIDChainHash()
+		}
+
+		u.readSkippedLanePositions(ctx, lanes, skipped)
 	}
 
 	// Logged on the failure path too: how long the list ran for is the first thing anyone

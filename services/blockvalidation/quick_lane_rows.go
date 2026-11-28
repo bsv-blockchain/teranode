@@ -12,6 +12,7 @@ import (
 	"github.com/bsv-blockchain/teranode/stores/utxo"
 	"github.com/bsv-blockchain/teranode/stores/utxo/fields"
 	"github.com/bsv-blockchain/teranode/util/lane"
+	"golang.org/x/sync/errgroup"
 )
 
 // Lane rows for a block stored by quick validation, at utxostore_laneMigration shadow (lanes
@@ -33,8 +34,12 @@ import (
 // position it was first written with, anywhere in any lane.
 const quickLanePendingMax = 1 << 16
 
-// quickLaneReadChunk is how many records one read of existing records' positions asks for.
-const quickLaneReadChunk = 1024
+// quickLaneReadChunk is how many records one read of existing records' positions asks for, and
+// quickLaneReadConcurrency how many such reads one batch runs at once.
+const (
+	quickLaneReadChunk       = 1024
+	quickLaneReadConcurrency = 8
+)
 
 // quickLanePositions collects the lane positions of one quick-validation attempt of one block. A
 // nil collection, which is what an attempt at off has, collects nothing.
@@ -48,7 +53,8 @@ type quickLanePositions struct {
 	// store that returned none.
 	unpositioned int
 	// noRecord counts transactions the block stores no record for: those whose create is skipped
-	// as unspendable (shouldSkipUnspendableCreate). They take no position, and nothing spends them.
+	// as unspendable (shouldSkipUnspendableCreate) and that were not stored before. They take no
+	// position, and nothing spends them.
 	noRecord int
 	// failed is the first read of existing records that failed; the block then goes without rows.
 	failed error
@@ -173,7 +179,6 @@ func (q *quickLanePositions) flushLocked() {
 		}
 
 		bm.AddMany(positions)
-		bm.RunOptimize()
 
 		q.pending[l] = positions[:0]
 	}
@@ -186,38 +191,65 @@ func (q *quickLanePositions) flushLocked() {
 // counts as unpositioned. A read that fails, whole or for one record, is recorded and the block goes
 // without rows: at shadow nothing may stop a block.
 func (u *BlockValidation) readExistingLanePositions(ctx context.Context, q *quickLanePositions, hashes []*chainhash.Hash) {
+	u.readLanePositions(ctx, q, hashes, false)
+}
+
+// readSkippedLanePositions is readExistingLanePositions for transactions whose create was skipped as
+// unspendable: one stored before, by an earlier attempt or while the skip was off, keeps its record
+// and position, and one not found has no record (addNoRecord).
+func (u *BlockValidation) readSkippedLanePositions(ctx context.Context, q *quickLanePositions, hashes []*chainhash.Hash) {
+	u.readLanePositions(ctx, q, hashes, true)
+}
+
+// readLanePositions reads hashes' positions in chunks of quickLaneReadChunk, at most
+// quickLaneReadConcurrency at once. notFoundIsNoRecord counts a record not found as none rather
+// than as one without a position.
+func (u *BlockValidation) readLanePositions(ctx context.Context, q *quickLanePositions, hashes []*chainhash.Hash, notFoundIsNoRecord bool) {
 	if q == nil || len(hashes) == 0 {
 		return
 	}
 
+	g, gCtx := errgroup.WithContext(ctx)
+	g.SetLimit(quickLaneReadConcurrency)
+
 	for start := 0; start < len(hashes); start += quickLaneReadChunk {
-		end := min(start+quickLaneReadChunk, len(hashes))
+		chunk := hashes[start:min(start+quickLaneReadChunk, len(hashes))]
 
-		items := make([]*utxo.UnresolvedMetaData, 0, end-start)
-		for i, h := range hashes[start:end] {
-			items = append(items, &utxo.UnresolvedMetaData{Hash: *h, Idx: i, Fields: []fields.FieldName{fields.LanePosition}})
-		}
-
-		if err := u.utxoStore.BatchDecorate(ctx, items, fields.LanePosition); err != nil {
-			q.fail(err)
-
-			return
-		}
-
-		positions := make([]uint64, len(items))
-
-		for i, it := range items {
-			switch {
-			case it.Err != nil && !errors.Is(it.Err, errors.ErrTxNotFound):
-				q.fail(it.Err)
-
-				return
-			case it.Err == nil && it.Data != nil:
-				positions[i] = it.Data.LanePosition
+		g.Go(func() error {
+			items := make([]*utxo.UnresolvedMetaData, 0, len(chunk))
+			for i, h := range chunk {
+				items = append(items, &utxo.UnresolvedMetaData{Hash: *h, Idx: i, Fields: []fields.FieldName{fields.LanePosition}})
 			}
-		}
 
-		q.add(positions...)
+			if err := u.utxoStore.BatchDecorate(gCtx, items, fields.LanePosition); err != nil {
+				return err
+			}
+
+			positions := make([]uint64, 0, len(items))
+			missing := 0
+
+			for _, it := range items {
+				switch {
+				case it.Err != nil && !errors.Is(it.Err, errors.ErrTxNotFound):
+					return it.Err
+				case it.Err != nil && notFoundIsNoRecord:
+					missing++
+				case it.Err == nil && it.Data != nil:
+					positions = append(positions, it.Data.LanePosition)
+				default:
+					positions = append(positions, lane.None)
+				}
+			}
+
+			q.add(positions...)
+			q.addNoRecord(missing)
+
+			return nil
+		})
+	}
+
+	if err := g.Wait(); err != nil {
+		q.fail(err)
 	}
 }
 

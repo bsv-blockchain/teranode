@@ -316,8 +316,8 @@ func TestQuickValidationLaneRowsAreTheRecordsPositions(t *testing.T) {
 	}
 }
 
-// A transaction whose create is skipped as unspendable has no record and no position, so the
-// rows leave it out, and the count check does not take it for a missing member.
+// A transaction whose create is skipped as unspendable has no record and no position, so the rows
+// leave it out and the count does not expect it; one stored before the block keeps its position.
 func TestQuickValidationLaneRowsLeaveOutTransactionsStoredWithoutARecord(t *testing.T) {
 	kind := quickLaneStores()[1]
 	bv, store, _ := newQuickLaneHarness(t, kind)
@@ -325,31 +325,40 @@ func TestQuickValidationLaneRowsLeaveOutTransactionsStoredWithoutARecord(t *test
 	bv.settings.BlockValidation.QuickValidateSkipUtxoLock = true
 	bv.settings.BlockValidation.SkipUnspendableTxStorageDuringCatchup = true
 
-	root, key := seedRoot(t, store, 2, "QUICK_LANE_UNSPENDABLE")
+	root, key := seedRoot(t, store, 3, "QUICK_LANE_UNSPENDABLE")
 
-	opReturn := bt.NewTx()
-	require.NoError(t, opReturn.FromUTXOs(&bt.UTXO{
-		TxIDHash:      root.TxIDChainHash(),
-		Vout:          0,
-		LockingScript: root.Outputs[0].LockingScript,
-		Satoshis:      root.Outputs[0].Satoshis,
-	}))
-	opReturn.Inputs[0].UnlockingScript = bscript.NewFromBytes([]byte{0x00})
-	require.NoError(t, opReturn.AddOpReturnOutput([]byte("quick-lane-unspendable")))
+	opReturnOf := func(vout uint32, data string) *bt.Tx {
+		tx := bt.NewTx()
+		require.NoError(t, tx.FromUTXOs(&bt.UTXO{
+			TxIDHash:      root.TxIDChainHash(),
+			Vout:          vout,
+			LockingScript: root.Outputs[vout].LockingScript,
+			Satoshis:      root.Outputs[vout].Satoshis,
+		}))
+		tx.Inputs[0].UnlockingScript = bscript.NewFromBytes([]byte{0x00})
+		require.NoError(t, tx.AddOpReturnOutput([]byte(data)))
 
+		return tx
+	}
+
+	opReturn := opReturnOf(0, "quick-lane-unspendable")
+	storedBefore := opReturnOf(2, "quick-lane-stored-before")
 	spendable := spendOf(t, key, root, 1, 90_000)
 
-	layout := [][]*bt.Tx{{opReturn, spendable}}
+	_, _, err := store.SpendAndCreate(context.Background(), storedBefore, 100, utxo.WithCreateOnly())
+	require.NoError(t, err)
+
+	layout := [][]*bt.Tx{{opReturn, spendable, storedBefore}}
 	block := netBlockFor(layout)
 
 	mismatches := laneMetric(t, "teranode_lane_row_count_mismatches_total", "", "")
 
 	ctx := quickValidateAttempt(t, bv, block, layout, kind, 0, 1)
 
-	_, err := store.Get(context.Background(), opReturn.TxIDChainHash())
+	_, err = store.Get(context.Background(), opReturn.TxIDChainHash())
 	require.ErrorIs(t, err, errors.ErrTxNotFound, "the unspendable transaction is stored without a record")
 
-	require.Equal(t, rowsOf(t, storedLanePositions(t, store, []*bt.Tx{spendable})), bv.quickLaneRows(ctx, block))
+	require.Equal(t, rowsOf(t, storedLanePositions(t, store, []*bt.Tx{spendable, storedBefore})), bv.quickLaneRows(ctx, block))
 	require.Equal(t, mismatches, laneMetric(t, "teranode_lane_row_count_mismatches_total", "", ""))
 }
 
