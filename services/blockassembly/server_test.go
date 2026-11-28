@@ -3,7 +3,9 @@ package blockassembly
 import (
 	"context"
 	"fmt"
+	"slices"
 	"sync"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -26,6 +28,7 @@ import (
 	"github.com/bsv-blockchain/teranode/util/lane"
 	"github.com/bsv-blockchain/teranode/util/test"
 	"github.com/bsv-blockchain/teranode/util/testutil"
+	"github.com/jellydator/ttlcache/v3"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/mock"
 	"github.com/stretchr/testify/require"
@@ -2869,4 +2872,166 @@ func TestIngestHandsLanePositionsOnlyAtShadow(t *testing.T) {
 
 		require.Equal(t, []uint64{0, second, third}, handedPositions(t, true, several))
 	})
+}
+
+// A request the storage worker abandons because its context ended must release its pin exactly
+// once, and only after the storage work that reads the subtree has ended.
+func TestSubtreeStorageWorkerReleasesAnAbandonedRequestAfterItsStoreEnds(t *testing.T) {
+	newRequest := func(t *testing.T, released *atomic.Int32, onStorageComplete func()) subtreeprocessor.NewSubtreeRequest {
+		st, err := subtreepkg.NewTreeByLeafCount(4)
+		require.NoError(t, err)
+		require.NoError(t, st.AddNode(chainhash.HashH([]byte("abandoned-request-tx")), 1, 1))
+
+		return subtreeprocessor.NewSubtreeRequest{
+			Subtree:           st,
+			OnStorageComplete: onStorageComplete,
+			Release:           func() { released.Add(1) },
+		}
+	}
+
+	t.Run("cancelled before the worker takes it", func(t *testing.T) {
+		ba, _ := setupServer(t)
+
+		ctx, cancel := context.WithCancel(t.Context())
+		cancel()
+
+		var released atomic.Int32
+
+		workChan := make(chan *subtreeStorageWork, 1)
+		workChan <- &subtreeStorageWork{request: newRequest(t, &released, nil)}
+		close(workChan)
+
+		ba.subtreeStorageWorker(ctx, workChan, make(chan *subtreeRetrySend, 1), make(chan *subtreeStorageResult))
+
+		require.Equal(t, int32(1), released.Load())
+	})
+
+	t.Run("cancelled while its result waits for the notifier", func(t *testing.T) {
+		ba, _ := setupServer(t)
+
+		ctx, cancel := context.WithCancel(t.Context())
+		defer cancel()
+
+		var released atomic.Int32
+
+		entered, finish := make(chan struct{}), make(chan struct{})
+
+		// runs after the store, as part of the work the subtree is read by: it ends the context,
+		// so the worker abandons the result, and stays busy until finish
+		request := newRequest(t, &released, func() {
+			cancel()
+			close(entered)
+			<-finish
+		})
+
+		workChan := make(chan *subtreeStorageWork, 1)
+		workChan <- &subtreeStorageWork{request: request}
+		close(workChan)
+
+		workerDone := make(chan struct{})
+
+		go func() {
+			defer close(workerDone)
+
+			ba.subtreeStorageWorker(ctx, workChan, make(chan *subtreeRetrySend, 1), make(chan *subtreeStorageResult))
+		}()
+
+		<-entered
+
+		require.Never(t, func() bool { return released.Load() > 0 }, 200*time.Millisecond, 20*time.Millisecond,
+			"the request was released while the storage work still reads its subtree")
+
+		close(finish)
+		<-workerDone
+
+		require.Equal(t, int32(1), released.Load())
+	})
+}
+
+// A request the listener cannot hand to a worker before its context ends must be released, once.
+func TestRunNewSubtreeListenerReleasesARequestItCouldNotQueue(t *testing.T) {
+	ba, _ := setupServerWithSettings(t, func(s *settings.Settings) {
+		s.BlockAssembly.SubtreeStorageWorkers = 1
+	})
+
+	ctx, cancel := context.WithCancel(t.Context())
+	defer cancel()
+
+	released := make([]atomic.Int32, 4)
+	newSubtreeChan := make(chan subtreeprocessor.NewSubtreeRequest, 4)
+	entered, finish := make(chan struct{}), make(chan struct{})
+
+	request := func(i int, onStorageComplete func()) subtreeprocessor.NewSubtreeRequest {
+		st, err := subtreepkg.NewTreeByLeafCount(4)
+		require.NoError(t, err)
+		require.NoError(t, st.AddNode(chainhash.HashH(fmt.Appendf(nil, "queued-request-%d", i)), 1, 1))
+
+		return subtreeprocessor.NewSubtreeRequest{Subtree: st, OnStorageComplete: onStorageComplete, Release: func() { released[i].Add(1) }}
+	}
+
+	listenerDone := make(chan struct{})
+
+	go func() {
+		defer close(listenerDone)
+
+		ba.runNewSubtreeListener(ctx, newSubtreeChan, make(chan *subtreeRetrySend, 1))
+	}()
+
+	// the only worker stays busy in this request's storage callback
+	newSubtreeChan <- request(0, func() {
+		close(entered)
+		<-finish
+	})
+
+	<-entered
+
+	// two requests fill the work queue, and the fourth waits in the listener for room
+	for i := 1; i < 4; i++ {
+		newSubtreeChan <- request(i, nil)
+	}
+
+	require.Eventually(t, func() bool { return len(newSubtreeChan) == 0 }, 5*time.Second, 10*time.Millisecond)
+
+	cancel()
+
+	require.Eventually(t, func() bool { return released[3].Load() == 1 }, 5*time.Second, 10*time.Millisecond,
+		"the request the listener could not queue was never released")
+
+	close(finish)
+	<-listenerDone
+
+	require.Equal(t, int32(1), released[3].Load())
+}
+
+// BenchmarkRetainedSubtrees measures one close's snapshot of the cached jobs' subtrees, which runs
+// on the processor goroutine. Each job has its own slice, the worst case: none is listed once.
+func BenchmarkRetainedSubtrees(b *testing.B) {
+	for _, jobs := range []int{1, 10, 100} {
+		for _, perJob := range []int{10, 100} {
+			b.Run(fmt.Sprintf("jobs=%d/subtrees=%d", jobs, perJob), func(b *testing.B) {
+				ba := &BlockAssembly{jobStore: ttlcache.New[chainhash.Hash, *subtreeprocessor.Job]()}
+
+				pool := make([]*subtreepkg.Subtree, perJob)
+				for i := range pool {
+					st, err := subtreepkg.NewTreeByLeafCount(4)
+					require.NoError(b, err)
+
+					pool[i] = st
+				}
+
+				for i := range jobs {
+					ba.jobStore.Set(chainhash.HashH(fmt.Appendf(nil, "job-%d", i)), &subtreeprocessor.Job{Subtrees: slices.Clone(pool)}, time.Hour)
+				}
+
+				b.ReportAllocs()
+				b.ResetTimer()
+
+				for range b.N {
+					if len(ba.retainedSubtrees()) == 0 {
+						b.Fatal("no subtrees retained")
+					}
+				}
+			})
+		}
+	}
 }

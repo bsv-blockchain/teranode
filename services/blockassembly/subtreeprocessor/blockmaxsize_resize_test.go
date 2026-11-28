@@ -91,6 +91,9 @@ func newBlockMaxSizeProcessor(t testing.TB, itemsPerSubtree, blockMaxSize int, o
 					}
 				}
 
+				// as subtreeStorageWorker does, before it answers
+				req.Done()
+
 				if req.ErrChan != nil {
 					req.ErrChan <- err
 				}
