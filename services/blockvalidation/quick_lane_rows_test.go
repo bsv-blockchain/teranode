@@ -467,8 +467,11 @@ func TestQuickLanePositionsCollect(t *testing.T) {
 		require.Equal(t, unpositioned+1, laneTxsWithoutPosition(t), "a record without a position is counted though the rows failed")
 	}
 
-	// A read that stalls ends at quickLaneReadTimeout, and the block goes without rows.
+	// A read that stalls ends at quickLaneReadTimeout, 30 s by default, and the block goes
+	// without rows.
 	timeout := quickLaneReadTimeout
+	require.Equal(t, 30*time.Second, timeout)
+
 	quickLaneReadTimeout = 50 * time.Millisecond
 
 	t.Cleanup(func() { quickLaneReadTimeout = timeout })
@@ -476,7 +479,10 @@ func TestQuickLanePositionsCollect(t *testing.T) {
 	bv.utxoStore = decorateFailingStore{stall: true}
 	ctx = bv.withQuickLanePositions(context.Background())
 	quickLanePositionsFrom(ctx).add(lane.Pack(7, 1))
+
+	start := time.Now()
 	bv.readExistingLanePositions(ctx, quickLanePositionsFrom(ctx), []*chainhash.Hash{{0x01}})
+	require.Less(t, time.Since(start), 2*time.Second, "the stalled read ends at the bound")
 	require.Nil(t, bv.quickLaneRows(ctx, block))
 
 	// After a failed read no further chunk is read, in this batch or a later one.
@@ -564,82 +570,83 @@ func laneServiceMetric(t *testing.T, metric, service string) float64 {
 	return sum
 }
 
-// commitBlock stores a quick-validated block's rows, so the lane reader answers its transactions
-// mined once it is deep enough, and the pruner's lane rule settles a parent of it spent in it.
-func TestQuickValidatedBlockThroughTheLaneReaderAndPruner(t *testing.T) {
-	f := newQuickLaneCommitFixture(t, "QUICK_LANE_READER")
-	bv, store, client, kind, layout, txs, block := f.bv, f.store, f.client, f.kind, f.layout, f.txs, f.block
-	blockChainStore := f.blockChainStore
+// commitBlock stores a quick-validated block with its rows, which the lane reader and the pruner's
+// lane rule then judge, and stores it without rows when its positions cannot be read.
+func TestQuickValidatedBlockCommit(t *testing.T) {
+	t.Run("rows reach the reader and the pruner", func(t *testing.T) {
+		f := newQuickLaneCommitFixture(t, "QUICK_LANE_READER")
+		bv, store, client, kind, layout, txs, block := f.bv, f.store, f.client, f.kind, f.layout, f.txs, f.block
+		blockChainStore := f.blockChainStore
 
-	ctx := context.Background()
-	logger := ulogger.TestLogger{}
+		ctx := context.Background()
+		logger := ulogger.TestLogger{}
 
-	attempt := quickValidateAttempt(t, bv, block, layout, kind, 0, len(layout))
-	require.NoError(t, bv.commitBlock(attempt, block, "", "test"))
+		attempt := quickValidateAttempt(t, bv, block, layout, kind, 0, len(layout))
+		require.NoError(t, bv.commitBlock(attempt, block, "", "test"))
 
-	positions := storedLanePositions(t, store, txs)
+		positions := storedLanePositions(t, store, txs)
 
-	stored, err := client.LaneMapRows(ctx, block.ID)
-	require.NoError(t, err)
-	require.Equal(t, rowsOf(t, positions), stored, "the rows went with the block")
-
-	// The reader settles a block once it is the coinbase maturity deep (1 in the test settings);
-	// three more blocks put it past that.
-	parent := block
-	for height := uint32(2); height <= 4; height++ {
-		next := quickLaneChainBlock(t, parent.Hash(), height, &model.Block{TransactionCount: 1})
-		_, _, err = blockChainStore.StoreBlock(ctx, next, "")
+		stored, err := client.LaneMapRows(ctx, block.ID)
 		require.NoError(t, err)
+		require.Equal(t, rowsOf(t, positions), stored, "the rows went with the block")
 
-		parent = next
-	}
+		// The reader settles a block once it is the coinbase maturity deep (1 in the test settings);
+		// three more blocks put it past that.
+		parent := block
+		for height := uint32(2); height <= 4; height++ {
+			next := quickLaneChainBlock(t, parent.Hash(), height, &model.Block{TransactionCount: 1})
+			_, _, err = blockChainStore.StoreBlock(ctx, next, "")
+			require.NoError(t, err)
 
-	readerCtx, cancel := context.WithCancel(ctx)
-	defer cancel()
+			parent = next
+		}
 
-	r := lanereader.Start(readerCtx, logger, bv.settings, client)
-	require.NotNil(t, r)
-	require.Eventually(t, func() bool { return r.Snapshot() != nil && r.Snapshot().TipHeight() == 4 }, 30*time.Second, 50*time.Millisecond)
+		readerCtx, cancel := context.WithCancel(ctx)
+		defer cancel()
 
-	v := r.MainView()
+		r := lanereader.Start(readerCtx, logger, bv.settings, client)
+		require.NotNil(t, r)
+		require.Eventually(t, func() bool { return r.Snapshot() != nil && r.Snapshot().TipHeight() == 4 }, 30*time.Second, 50*time.Millisecond)
 
-	for i, pos := range positions {
-		require.True(t, v.Lookup(pos).Mined, "transaction %d of the quick-validated block is mined", i)
-	}
+		v := r.MainView()
 
-	judge := r.PruneJudge(lanereader.PruneStoreUtxoset, bv.settings.GlobalBlockHeightRetention)
-	defer judge.Done()
+		for i, pos := range positions {
+			require.True(t, v.Lookup(pos).Mined, "transaction %d of the quick-validated block is mined", i)
+		}
 
-	// a0 is spent by a1, both in the quick-validated block.
-	verdict := judge.Judge(lanereader.TodayDelete, &lanereader.PruneCandidate{
-		ParentPos: positions[0],
-		Spenders:  []lanereader.PruneSpender{{Pos: positions[1]}},
+		judge := r.PruneJudge(lanereader.PruneStoreUtxoset, bv.settings.GlobalBlockHeightRetention)
+		defer judge.Done()
+
+		// a0 is spent by a1, both in the quick-validated block.
+		verdict := judge.Judge(lanereader.TodayDelete, &lanereader.PruneCandidate{
+			ParentPos: positions[0],
+			Spenders:  []lanereader.PruneSpender{{Pos: positions[1]}},
+		})
+		require.Equal(t, lanereader.PruneVerdict{Lanes: lanereader.PruneDelete, Reason: lanereader.ReasonSettled}, verdict)
 	})
-	require.Equal(t, lanereader.PruneVerdict{Lanes: lanereader.PruneDelete, Reason: lanereader.ReasonSettled}, verdict)
-}
 
-// A block whose existing records' positions cannot be read is still stored, without rows.
-func TestQuickValidatedBlockIsStoredWithoutRowsWhenAPositionReadFails(t *testing.T) {
-	f := newQuickLaneCommitFixture(t, "QUICK_LANE_READ_FAILS")
-	bv, store, client, kind, layout, block := f.bv, f.store, f.client, f.kind, f.layout, f.block
+	t.Run("a failed position read stores the block without rows", func(t *testing.T) {
+		f := newQuickLaneCommitFixture(t, "QUICK_LANE_READ_FAILS")
+		bv, store, client, kind, layout, block := f.bv, f.store, f.client, f.kind, f.layout, f.block
 
-	ctx := context.Background()
+		ctx := context.Background()
 
-	// The first attempt is cut off after its first subtree, so the redo finds those records.
-	quickValidateAttempt(t, bv, block, layout, kind, 0, 1)
+		// The first attempt is cut off after its first subtree, so the redo finds those records.
+		quickValidateAttempt(t, bv, block, layout, kind, 0, 1)
 
-	bv.utxoStore = decorateFailingStore{Store: store, whole: errors.NewStorageError("decorate failed")}
+		bv.utxoStore = decorateFailingStore{Store: store, whole: errors.NewStorageError("decorate failed")}
 
-	redo := quickValidateAttempt(t, bv, block, layout, kind, 0, len(layout))
-	require.NoError(t, bv.commitBlock(redo, block, "", "test"))
+		redo := quickValidateAttempt(t, bv, block, layout, kind, 0, len(layout))
+		require.NoError(t, bv.commitBlock(redo, block, "", "test"))
 
-	exists, err := client.GetBlockExists(ctx, block.Hash())
-	require.NoError(t, err)
-	require.True(t, exists, "the block is stored")
+		exists, err := client.GetBlockExists(ctx, block.Hash())
+		require.NoError(t, err)
+		require.True(t, exists, "the block is stored")
 
-	rows, err := client.LaneMapRows(ctx, block.ID)
-	require.NoError(t, err)
-	require.Empty(t, rows)
+		rows, err := client.LaneMapRows(ctx, block.ID)
+		require.NoError(t, err)
+		require.Empty(t, rows)
+	})
 }
 
 // withQuickLaneBlockchain gives bv a blockchain client over a fresh SQLite blockchain store.
