@@ -534,24 +534,11 @@ func TestQuickValidatedBlockThroughTheLaneReaderAndPruner(t *testing.T) {
 	ctx := context.Background()
 	logger := ulogger.TestLogger{}
 
-	blockChainStore, err := blockchain_store.NewStore(logger, &url.URL{Scheme: "sqlitememory"}, bv.settings)
-	require.NoError(t, err)
-
-	client, err := blockchain.NewLocalClient(logger, bv.settings, blockChainStore, nil, nil)
-	require.NoError(t, err)
-
-	bv.blockchainClient = client
+	blockChainStore, client := withQuickLaneBlockchain(t, bv)
 
 	root, key := seedRoot(t, store, 4, "QUICK_LANE_READER")
 	layout, txs, fixture := quickLaneBlock(t, key, root)
-
-	block := quickLaneChainBlock(t, bv.settings.ChainCfgParams.GenesisHash, 1, fixture)
-
-	id, err := client.AssignBlockID(ctx, block.Hash())
-	require.NoError(t, err)
-
-	block.ID, err = blockIDToUint32(id, block.Hash().String())
-	require.NoError(t, err)
+	block := quickLaneFirstBlock(t, bv, client, fixture)
 
 	attempt := quickValidateAttempt(t, bv, block, layout, kind, 0, len(layout))
 	require.NoError(t, bv.commitBlock(attempt, block, "", "test"))
@@ -595,6 +582,68 @@ func TestQuickValidatedBlockThroughTheLaneReaderAndPruner(t *testing.T) {
 		Spenders:  []lanereader.PruneSpender{{Pos: positions[1]}},
 	})
 	require.Equal(t, lanereader.PruneVerdict{Lanes: lanereader.PruneDelete, Reason: lanereader.ReasonSettled}, verdict)
+}
+
+// A block whose existing records' positions cannot be read is still stored, without rows.
+func TestQuickValidatedBlockIsStoredWithoutRowsWhenAPositionReadFails(t *testing.T) {
+	initPrometheusMetrics()
+
+	kind := quickLaneStores()[0]
+	bv, store, _ := newQuickLaneHarness(t, kind)
+
+	ctx := context.Background()
+
+	_, client := withQuickLaneBlockchain(t, bv)
+
+	root, key := seedRoot(t, store, 4, "QUICK_LANE_READ_FAILS")
+	layout, _, fixture := quickLaneBlock(t, key, root)
+	block := quickLaneFirstBlock(t, bv, client, fixture)
+
+	// The first attempt is cut off after its first subtree, so the redo finds those records.
+	quickValidateAttempt(t, bv, block, layout, kind, 0, 1)
+
+	bv.utxoStore = decorateFailingStore{Store: store, whole: errors.NewStorageError("decorate failed")}
+
+	redo := quickValidateAttempt(t, bv, block, layout, kind, 0, len(layout))
+	require.NoError(t, bv.commitBlock(redo, block, "", "test"))
+
+	exists, err := client.GetBlockExists(ctx, block.Hash())
+	require.NoError(t, err)
+	require.True(t, exists, "the block is stored")
+
+	rows, err := client.LaneMapRows(ctx, block.ID)
+	require.NoError(t, err)
+	require.Empty(t, rows)
+}
+
+// withQuickLaneBlockchain gives bv a blockchain client over a fresh SQLite blockchain store.
+func withQuickLaneBlockchain(t *testing.T, bv *BlockValidation) (blockchain_store.Store, blockchain.ClientI) {
+	t.Helper()
+
+	blockChainStore, err := blockchain_store.NewStore(ulogger.TestLogger{}, &url.URL{Scheme: "sqlitememory"}, bv.settings)
+	require.NoError(t, err)
+
+	client, err := blockchain.NewLocalClient(ulogger.TestLogger{}, bv.settings, blockChainStore, nil, nil)
+	require.NoError(t, err)
+
+	bv.blockchainClient = client
+
+	return blockChainStore, client
+}
+
+// quickLaneFirstBlock is fixture as block 1 on genesis, with the ID quick validation reserves for it.
+func quickLaneFirstBlock(t *testing.T, bv *BlockValidation, client blockchain.ClientI, fixture *model.Block) *model.Block {
+	t.Helper()
+
+	block := quickLaneChainBlock(t, bv.settings.ChainCfgParams.GenesisHash, 1, fixture)
+
+	id, err := client.AssignBlockID(context.Background(), block.Hash())
+	require.NoError(t, err)
+
+	block.ID, err = blockIDToUint32(id, block.Hash().String())
+	require.NoError(t, err)
+
+	return block
 }
 
 // quickLaneChainBlock is fixture as a block at height on parent, with a header that meets the
