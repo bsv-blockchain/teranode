@@ -12,6 +12,7 @@ var (
 	prometheusLanePositions     prometheus.Counter
 	prometheusLaneGrants        prometheus.Counter
 	prometheusLaneWaits         prometheus.Counter
+	prometheusLaneWaitSeconds   *prometheus.HistogramVec
 	prometheusLaneTakeFailures  prometheus.Counter
 	prometheusLaneRefusedGrants prometheus.Counter
 	prometheusLaneReused        prometheus.Counter
@@ -45,6 +46,13 @@ func initPrometheusMetrics() {
 			Name:      "waits_total",
 			Help:      "Takes of a lane position that had to wait because none was in hand",
 		})
+		prometheusLaneWaitSeconds = promauto.NewHistogramVec(prometheus.HistogramOpts{
+			Namespace: "teranode",
+			Subsystem: "lane",
+			Name:      "wait_seconds",
+			Help:      "How long each take counted in teranode_lane_waits_total waited, until it got a position or failed. reason is why none was in hand: aged_out, the grant outlived blockchain_laneGrantDuration with no next grant held; used_up, its last position was taken with no next grant held; no_lease, no lease is held or its last good renewal is older than blockchain_laneLeaseStopAfter",
+			Buckets:   []float64{0.0005, 0.001, 0.0025, 0.005, 0.01, 0.025, 0.05, 0.1, 0.25, 0.5, 1, 2.5, 5},
+		}, []string{"reason"})
 		prometheusLaneTakeFailures = promauto.NewCounter(prometheus.CounterOpts{
 			Namespace: "teranode",
 			Subsystem: "lane",

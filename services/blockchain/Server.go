@@ -1742,6 +1742,30 @@ func (b *Blockchain) GetLaneMapRows(ctx context.Context, req *blockchain_api.Get
 	return &blockchain_api.GetLaneMapRowsResponse{Rows: laneMapRowsToProto(rows)}, nil
 }
 
+// InsertLaneMapRows stores the lane map rows of a block already stored, insert-only.
+func (b *Blockchain) InsertLaneMapRows(ctx context.Context, req *blockchain_api.InsertLaneMapRowsRequest) (*emptypb.Empty, error) {
+	ctx, _, deferFn := tracing.Tracer("blockchain").Start(ctx, "InsertLaneMapRows",
+		tracing.WithParentStat(b.stats),
+	)
+	defer deferFn()
+
+	hash, err := chainhash.NewHash(req.GetBlockHash())
+	if err != nil {
+		return nil, errors.WrapGRPC(errors.NewInvalidArgumentError("lane map rows block hash", err))
+	}
+
+	rows, err := laneMapRowsFromProto(req.GetRows())
+	if err != nil {
+		return nil, errors.WrapGRPC(err)
+	}
+
+	if err = insertStoredBlockLaneMapRows(ctx, b.store, hash, rows); err != nil {
+		return nil, errors.WrapGRPC(err)
+	}
+
+	return &emptypb.Empty{}, nil
+}
+
 // GetLaneCapGrants returns, for each lane with one, the first grant handed out at or above a
 // height, for block assembly's restart dry run.
 func (b *Blockchain) GetLaneCapGrants(ctx context.Context, req *blockchain_api.GetLaneCapGrantsRequest) (*blockchain_api.GetLaneCapGrantsResponse, error) {

@@ -49,8 +49,9 @@ const (
 	KindDifferentBlock = "different_block"
 	// KindNoPosition: the transaction has no lane position, so lanes cannot answer.
 	KindNoPosition = "no_position"
-	// KindNoRows: today says mined in a block the map has no rows for (quick validation, or our own
-	// block until block assembly writes rows), and lanes says not. Not a disagreement.
+	// KindNoRows: today says mined in a block the map has no rows for (a block stored before shadow,
+	// one quick validation stored on a store that returns no positions, or our own block until
+	// block assembly writes rows), and lanes says not. Not a disagreement.
 	KindNoRows = "no_rows"
 	// KindNotLoaded: the index cannot judge the check. The block today names is outside what the
 	// index loaded or has been forgotten, a height names a fork block whose rows are gone, the

@@ -13,8 +13,9 @@ import (
 )
 
 // The Phase 1 block gate's store half, at utxostore_laneMigration shadow: StoreBlock inserts the
-// rows its caller built (options.WithLaneMapRows) in the block's own database transaction, so rows
-// are only ever inserted with their block, and commit or roll back with it. Rows are kept for ever:
+// rows its caller built (options.WithLaneMapRows) in the block's own database transaction, so the
+// rows it inserts commit or roll back with their block. InsertLaneMapRows is the other writer, for
+// a block already stored, and writes only where the block has none. Rows are kept for ever:
 // DeleteBlock, which the rewind tool uses, removes the block and leaves its rows. Block IDs come
 // from a sequence that never hands one out again (BIGSERIAL, SQLite AUTOINCREMENT), so such rows
 // name a block ID no block has, which no chain reaches, and a reader has to resolve rows through

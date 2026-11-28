@@ -269,6 +269,10 @@ type BlockValidation struct {
 	// stopped waiting for included (lane_rows.go); laneBitmapReadSlots makes it.
 	laneBitmapSlots     chan struct{}
 	laneBitmapSlotsOnce sync.Once
+	// quickLaneSlots bounds quick validation's lane position reads in flight across every block;
+	// see quickLaneReadSlots.
+	quickLaneSlots     chan struct{}
+	quickLaneSlotsOnce sync.Once
 
 	// subtreeBlockHeightRetention specifies how long subtrees should be retained
 	subtreeBlockHeightRetention uint32

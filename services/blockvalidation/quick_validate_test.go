@@ -17,13 +17,16 @@ import (
 	"github.com/bsv-blockchain/teranode/model"
 	"github.com/bsv-blockchain/teranode/pkg/fileformat"
 	"github.com/bsv-blockchain/teranode/services/blockvalidation/testhelpers"
+	"github.com/bsv-blockchain/teranode/settings"
 	"github.com/bsv-blockchain/teranode/stores/blockchain/options"
 	"github.com/bsv-blockchain/teranode/stores/utxo"
+	"github.com/bsv-blockchain/teranode/stores/utxo/fields"
 	"github.com/bsv-blockchain/teranode/stores/utxo/meta"
 	"github.com/bsv-blockchain/teranode/stores/utxo/sql"
 	"github.com/bsv-blockchain/teranode/test/utils/transactions"
 	"github.com/bsv-blockchain/teranode/ulogger"
 	"github.com/bsv-blockchain/teranode/util/expiringmap"
+	"github.com/bsv-blockchain/teranode/util/lane"
 	testutil "github.com/bsv-blockchain/teranode/util/test"
 	prometheustestutil "github.com/prometheus/client_golang/prometheus/testutil"
 	"github.com/stretchr/testify/assert"
@@ -1324,4 +1327,81 @@ func TestOutpointOnly_MetricIncrementsBelowOnly(t *testing.T) {
 		require.NoError(t, err)
 		require.Equal(t, before, prometheustestutil.ToFloat64(prometheusBlockValidationOutpointOnlyBlocks))
 	})
+}
+
+// Both quick-validation entry points, over a real utxoset store and a real blockchain store, store
+// the block with rows holding its transactions' positions at shadow, and with none at off.
+func TestQuickValidateBlock_StoresLaneRowsOnRealStores(t *testing.T) {
+	for _, tc := range []struct {
+		name string
+		mode settings.LaneMigration
+	}{
+		{"sync", settings.LaneMigrationShadow},
+		{"async", settings.LaneMigrationShadow},
+		{"sync", settings.LaneMigrationOff},
+		{"async", settings.LaneMigrationOff},
+	} {
+		name := tc.name
+
+		t.Run(name+" at "+string(tc.mode), func(t *testing.T) {
+			suite := NewCatchupTestSuite(t)
+			defer suite.Cleanup()
+
+			bv := suite.Server.blockValidation
+			bv.settings.UtxoStore.LaneMigration = tc.mode
+			setCheckpoints(t, suite, 1000)
+
+			store := openQuickLaneUtxoset(t, bv.settings)
+
+			taker, ok := utxo.As[utxo.LanePositionTaker](store)
+			require.True(t, ok)
+			taker.SetLanePositionSource(&quickLaneSource{lane: 7})
+
+			bv.utxoStore = store
+			_, client := withQuickLaneBlockchain(t, bv)
+
+			block := buildOneSubtreeBlock(t, suite, 1)
+			block.Header.HashPrevBlock = bv.settings.ChainCfgParams.GenesisHash
+
+			for ok := false; !ok; {
+				if ok, _, _ = block.Header.HasMetTargetDifficulty(); !ok {
+					block.Header.Nonce++
+				}
+			}
+
+			// The block's first transaction spends its coinbase, which block assembly would create.
+			_, _, err := store.SpendAndCreate(context.Background(), block.CoinbaseTx, 0,
+				utxo.WithMinedBlockInfo(utxo.MinedBlockInfo{BlockID: 1, BlockHeight: 1}), utxo.WithCreateOnly())
+			require.NoError(t, err)
+
+			if name == "sync" {
+				require.NoError(t, bv.quickValidateBlock(suite.Ctx, block, "test", ""))
+			} else {
+				_, _, err = bv.quickValidateBlockAsync(suite.Ctx, block, "test", "", startTestSubtreeWriteWorker(t, bv))
+				require.NoError(t, err)
+			}
+
+			stored, err := client.LaneMapRows(context.Background(), block.ID)
+			require.NoError(t, err)
+
+			if tc.mode == settings.LaneMigrationOff {
+				require.Empty(t, stored)
+				return
+			}
+
+			positions := make([]uint64, 0, len(block.SubtreeSlices[0].Nodes)-1)
+
+			for _, node := range block.SubtreeSlices[0].Nodes[1:] {
+				md, err := store.Get(context.Background(), &node.Hash, fields.LanePosition)
+				require.NoError(t, err)
+				require.True(t, lane.Valid(md.LanePosition))
+
+				positions = append(positions, md.LanePosition)
+			}
+
+			require.Len(t, positions, 2)
+
+			require.Equal(t, rowsOf(t, positions), stored)
+		})
+	}
 }

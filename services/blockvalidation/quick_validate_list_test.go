@@ -18,6 +18,7 @@ import (
 	txmap "github.com/bsv-blockchain/go-tx-map"
 	"github.com/bsv-blockchain/teranode/errors"
 	"github.com/bsv-blockchain/teranode/model"
+	"github.com/bsv-blockchain/teranode/settings"
 	"github.com/bsv-blockchain/teranode/stores/utxo"
 	"github.com/bsv-blockchain/teranode/stores/utxo/fields"
 	"github.com/bsv-blockchain/teranode/stores/utxo/meta"
@@ -236,12 +237,7 @@ func newListHarness(t *testing.T, dbName string, outpointOnly bool) (*BlockValid
 	ctx, cancel := context.WithTimeout(context.Background(), 60*time.Second)
 
 	logger := ulogger.TestLogger{}
-	tSettings := testutil.CreateBaseTestSettings(t)
-
-	if outpointOnly {
-		tSettings.BlockValidation.OutpointOnlyBelowCheckpoint = true
-		tSettings.ChainCfgParams.Checkpoints = []chaincfg.Checkpoint{{Height: 1000}}
-	}
+	tSettings := quickTestSettings(t, outpointOnly)
 
 	storeURL, err := url.Parse("sqlitememory:///" + dbName)
 	require.NoError(t, err)
@@ -252,24 +248,48 @@ func newListHarness(t *testing.T, dbName string, outpointOnly bool) (*BlockValid
 
 	recorder := &applyRecorder{Store: realStore}
 
+	bv := newQuickTestBlockValidation(t, tSettings, recorder)
+
+	return bv, recorder, cancel
+}
+
+// quickTestSettings are the test settings, with outpointOnly in the below-checkpoint mode: the
+// operator flag on and a checkpoint at 1000, above the fixture blocks.
+func quickTestSettings(t *testing.T, outpointOnly bool) *settings.Settings {
+	t.Helper()
+
+	tSettings := testutil.CreateBaseTestSettings(t)
+
+	if outpointOnly {
+		tSettings.BlockValidation.OutpointOnlyBelowCheckpoint = true
+		tSettings.ChainCfgParams.Checkpoints = []chaincfg.Checkpoint{{Height: 1000}}
+	}
+
+	return tSettings
+}
+
+// newQuickTestBlockValidation is the BlockValidation the quick-validation tests apply batches with,
+// over store; its caches stop when the test ends.
+func newQuickTestBlockValidation(t *testing.T, tSettings *settings.Settings, store utxo.Store) *BlockValidation {
+	t.Helper()
+
 	bv := &BlockValidation{
-		logger:                        logger,
+		logger:                        ulogger.TestLogger{},
 		settings:                      tSettings,
 		blockHashesCurrentlyValidated: txmap.NewSwissMap(0),
 		blockExistsCache:              expiringmap.New[chainhash.Hash, bool](120 * time.Minute),
-		utxoStore:                     recorder,
+		utxoStore:                     store,
 		lastValidatedBlocks:           expiringmap.New[chainhash.Hash, *model.Block](2 * time.Minute),
 		blocksCurrentlyValidating:     txmap.NewSyncedMap[chainhash.Hash, *validationResult](),
 		spendRetryBackoff:             time.Millisecond,
 	}
 
-	cleanup := func() {
+	t.Cleanup(func() {
 		bv.blockExistsCache.Stop()
 		bv.lastValidatedBlocks.Stop()
-		cancel()
-	}
+	})
 
-	return bv, recorder, cleanup
+	return bv
 }
 
 // listBatchForErr is listBatchFor without the require dependency. outpointOnly is the
@@ -864,6 +884,8 @@ type flakyTxStore struct {
 	spendOnly bool
 	failTimes atomic.Int32
 }
+
+func (s *flakyTxStore) Unwrap() utxo.Store { return s.Store }
 
 func (s *flakyTxStore) SpendAndCreateMulti(ctx context.Context, txs []*bt.Tx, blockHeight uint32,
 	opts ...utxo.CreateOption) ([]utxo.SpendAndCreateMultiResult, error) {

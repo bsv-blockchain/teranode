@@ -170,6 +170,14 @@ func TestLaneRowsCountAMismatchAndStillGoWithTheBlock(t *testing.T) {
 		require.Len(t, u.laneRows(context.Background(), block), 2)
 		require.Equal(t, before+1, laneMetric(t, "teranode_lane_row_count_mismatches_total", "direction", tc.direction))
 	}
+
+	// More transactions without a record than the block holds besides its coinbase is no wrap
+	// past zero either.
+	block.TransactionCount = 2
+	fewer := laneMetric(t, "teranode_lane_row_count_mismatches_total", "direction", lane.MismatchFewer)
+
+	u.checkLaneRowCount(block, 0, 5)
+	require.Equal(t, fewer, laneMetric(t, "teranode_lane_row_count_mismatches_total", "direction", lane.MismatchFewer))
 }
 
 // A block whose bitmaps files were all read but hold no position, as for subtrees of transactions

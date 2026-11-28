@@ -5,6 +5,7 @@ import (
 	"context"
 	"database/sql"
 	"sync"
+	"time"
 
 	"github.com/bsv-blockchain/go-bt/v2/chainhash"
 	"github.com/bsv-blockchain/teranode/errors"
@@ -119,6 +120,30 @@ func (s *SQL) lockLaneProcess() func() {
 	return laneWriteMu.Unlock
 }
 
+// laneWriteLockPoll is how often lockLaneProcessUntil tries laneWriteMu again.
+const laneWriteLockPoll = time.Millisecond
+
+// lockLaneProcessUntil is lockLaneProcess for a caller that can give up: on SQLite it waits for
+// laneWriteMu only until ctx ends, and then returns an error and holds nothing.
+func (s *SQL) lockLaneProcessUntil(ctx context.Context) (func(), error) {
+	if s.engine == util.Postgres {
+		return func() {}, nil
+	}
+
+	ticker := time.NewTicker(laneWriteLockPoll)
+	defer ticker.Stop()
+
+	for !laneWriteMu.TryLock() {
+		select {
+		case <-ctx.Done():
+			return nil, errors.NewStorageError("wait for the lane write lock", ctx.Err())
+		case <-ticker.C:
+		}
+	}
+
+	return laneWriteMu.Unlock, nil
+}
+
 // lockLaneWrite takes the lock for one block's rows or for the segment tables, for the rest of tx
 // on Postgres. On SQLite the caller holds laneWriteMu instead.
 func (s *SQL) lockLaneWrite(ctx context.Context, tx *sql.Tx, class int32, key uint32) error {
@@ -209,14 +234,19 @@ const (
 // is a first insert. A live block can be stored with none: the coinbase is not in the rows (its
 // subtree holds a placeholder for it), so a coinbase-only block gets none; at shadow a block whose
 // subtrees' lane bitmaps are missing, or hold no position, gets none; and so does a block quick
-// validation stores. A block this node mined gets rows when the bitmaps of all its subtrees are
+// validation stores when none of its records came back with a position. A block this node mined gets rows when the bitmaps of all its subtrees are
 // kept. A historical block with none has no readable transaction to place.
 func (s *SQL) InsertLaneMapRows(ctx context.Context, blockID uint32, rows []lane.MapRow) error {
 	if err := lane.CheckMapRows(rows); err != nil {
 		return errors.NewProcessingError("block %d", blockID, err)
 	}
 
-	defer s.lockLaneProcess()()
+	unlock, err := s.lockLaneProcessUntil(ctx)
+	if err != nil {
+		return errors.NewStorageError("lane map insert for block %d", blockID, err)
+	}
+
+	defer unlock()
 
 	tx, err := s.db.BeginTx(ctx, nil)
 	if err != nil {
@@ -240,8 +270,8 @@ func (s *SQL) InsertLaneMapRows(ctx context.Context, blockID uint32, rows []lane
 // commit a block's rows with the block itself. On Postgres it takes the block's lane write lock
 // first, held to the end of tx, so two writers of one block never both see no rows and insert
 // different ones. On SQLite the lock is laneWriteMu, which only the caller can hold for the whole
-// transaction: the caller takes s.lockLaneProcess() before beginning tx and releases it after the
-// commit, as InsertLaneMapRows and StoreBlock do. StoreBlock calls it through
+// transaction: the caller takes it before beginning tx and releases it after the commit, as
+// StoreBlock (lockLaneProcess) and InsertLaneMapRows (lockLaneProcessUntil) do. StoreBlock calls it through
 // insertLaneMapRowsWithBlock, under a savepoint in the block's own transaction.
 func (s *SQL) insertLaneMapRowsTx(ctx context.Context, tx *sql.Tx, blockID uint32, rows []lane.MapRow) error {
 	if err := s.lockLaneWrite(ctx, tx, laneMapLockClass, blockID); err != nil {

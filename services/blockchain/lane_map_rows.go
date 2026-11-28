@@ -1,8 +1,12 @@
 package blockchain
 
 import (
+	"context"
+
+	"github.com/bsv-blockchain/go-bt/v2/chainhash"
 	"github.com/bsv-blockchain/teranode/errors"
 	"github.com/bsv-blockchain/teranode/services/blockchain/blockchain_api"
+	blockchain_store "github.com/bsv-blockchain/teranode/stores/blockchain"
 	"github.com/bsv-blockchain/teranode/util/lane"
 )
 
@@ -53,4 +57,23 @@ func laneMapRowsFromProto(rows []*blockchain_api.LaneMapRow) ([]lane.MapRow, err
 	}
 
 	return out, nil
+}
+
+// insertStoredBlockLaneMapRows stores the lane map rows of the block hash names under the ID the
+// store gave it. It refuses a block it does not find stored, or finds stored as invalid, as
+// StoreBlock gives an invalid block no rows. The read and the insert are separate, so a block
+// invalidated or deleted in between keeps the rows, as a block stored with rows and invalidated
+// later does. The store's insert is insert-only, so rows that say what is stored already write
+// nothing and rows that differ fail.
+func insertStoredBlockLaneMapRows(ctx context.Context, store blockchain_store.Store, hash *chainhash.Hash, rows []lane.MapRow) error {
+	_, meta, err := store.GetBlockHeader(ctx, hash)
+	if err != nil {
+		return err
+	}
+
+	if meta.Invalid {
+		return errors.NewInvalidArgumentError("block %s is stored as invalid, so it takes no lane map rows", hash.String())
+	}
+
+	return store.InsertLaneMapRows(ctx, meta.ID, rows)
 }

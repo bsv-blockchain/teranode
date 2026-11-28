@@ -10,6 +10,7 @@ import (
 	"github.com/bsv-blockchain/teranode/util/test"
 	"github.com/bsv-blockchain/teranode/util/uaerospike"
 	aerospike2 "github.com/bsv-blockchain/testcontainers-aerospike-go"
+	"github.com/testcontainers/testcontainers-go"
 )
 
 // init disables the testcontainers Ryuk reaper sidecar on CI only. Ryuk pulls
@@ -33,12 +34,24 @@ func init() {
 	_ = os.Setenv("TESTCONTAINERS_RYUK_DISABLED", "true")
 }
 
+// InitAerospikeContainer starts an Aerospike server for a test: test.AerospikeImage, or the image
+// AEROSPIKE_CONTAINER_IMAGE names (the BSV fork, to run the native mod-teranode operations), on the
+// platform in AEROSPIKE_CONTAINER_PLATFORM when that is set.
 func InitAerospikeContainer() (string, func() error, error) {
 	aerospike.InitPrometheusMetrics()
 
 	ctx := context.Background()
 
-	container, err := aerospike2.RunContainer(ctx, aerospike2.WithImage(test.AerospikeImage), aerospike2.WithTTLSupport("test"))
+	opts := []testcontainers.ContainerCustomizer{aerospike2.WithImage(test.AerospikeImage), aerospike2.WithTTLSupport("test")}
+	if image := os.Getenv("AEROSPIKE_CONTAINER_IMAGE"); image != "" {
+		opts = append(opts, aerospike2.WithImage(image))
+	}
+
+	if platform := os.Getenv("AEROSPIKE_CONTAINER_PLATFORM"); platform != "" {
+		opts = append(opts, testcontainers.WithImagePlatform(platform))
+	}
+
+	container, err := aerospike2.RunContainer(ctx, opts...)
 	if err != nil {
 		return "", nil, err
 	}
