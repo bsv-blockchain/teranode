@@ -799,15 +799,19 @@ func (u *BlockValidation) commitBlock(ctx context.Context, block *model.Block, p
 	// would delete the .subtree files of a block now recorded as having them, and fall through to
 	// normal validation, which finds the block stored and does nothing. ServiceError so the legacy
 	// park reads it as retry-later and keeps the block instead of rejecting a committed one.
-	if err := u.unlockSubtreeTransactionsWithRetry(ctx, block, caller); err != nil {
-		return markBlockCommitted(errors.NewServiceError("[%s][%s] block is committed but its UTXOs are still locked", caller, block.Hash().String(), err))
+	unlockErr := u.unlockSubtreeTransactionsWithRetry(ctx, block, caller)
+	if unlockErr == nil {
+		prometheusBlockValidationQuickCommitUnlock.Observe(time.Since(start).Seconds())
 	}
 
-	prometheusBlockValidationQuickCommitUnlock.Observe(time.Since(start).Seconds())
-
-	// After the unlock, so an insert that waits for a lane write lock never keeps outputs locked.
+	// After the unlock, so an insert that waits for a lane write lock never keeps outputs locked,
+	// and whatever the unlock's outcome, since no later attempt quick-validates a stored block.
 	if insertRowsLate {
 		u.insertLaneRowsOfStoredBlock(ctx, block, rows, caller)
+	}
+
+	if unlockErr != nil {
+		return markBlockCommitted(errors.NewServiceError("[%s][%s] block is committed but its UTXOs are still locked", caller, block.Hash().String(), unlockErr))
 	}
 
 	start = time.Now()

@@ -77,6 +77,40 @@ func TestLaneMapRowsInsertAndRead(t *testing.T) {
 	})
 }
 
+// On SQLite an insert waits for the lane write lock only until its caller gives up, writing
+// nothing, and goes in once the lock is free.
+func TestInsertLaneMapRowsGivesUpWaitingForTheSQLiteLaneLock(t *testing.T) {
+	storeURL, err := url.Parse("sqlitememory:///")
+	require.NoError(t, err)
+
+	s, err := New(ulogger.TestLogger{}, storeURL, test.CreateBaseTestSettings(t))
+	require.NoError(t, err)
+
+	rows := holedRows(t, 7, 1, 2, 3)
+
+	laneWriteMu.Lock()
+
+	ctx, cancel := context.WithTimeout(t.Context(), 50*time.Millisecond)
+	start := time.Now()
+	err = s.InsertLaneMapRows(ctx, 1_000, rows)
+
+	cancel()
+	laneWriteMu.Unlock()
+
+	require.Error(t, err)
+	require.Less(t, time.Since(start), 5*time.Second, "it gave up at its deadline")
+
+	none, err := s.LaneMapRows(t.Context(), 1_000)
+	require.NoError(t, err)
+	require.Empty(t, none)
+
+	require.NoError(t, s.InsertLaneMapRows(t.Context(), 1_000, rows))
+
+	got, err := s.LaneMapRows(t.Context(), 1_000)
+	require.NoError(t, err)
+	require.Len(t, got, 1)
+}
+
 func TestLaneMapRowsRefuseInvalidRows(t *testing.T) {
 	t.Parallel() // a database of its own on the shared server
 

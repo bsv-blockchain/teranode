@@ -787,35 +787,75 @@ func TestQuickValidatedBlockCommit(t *testing.T) {
 		})
 	}
 
-	// A late insert that fails is counted and the commit still completes; one whose caller has given
-	// up still runs, on a context of its own with a deadline.
-	for _, fail := range []bool{true, false} {
-		t.Run(fmt.Sprintf("a late insert after the caller gave up fails=%t", fail), func(t *testing.T) {
-			f := newQuickLaneCommitFixture(t, fmt.Sprintf("QUICK_LANE_LATE_%t", fail))
+	// A late insert runs after the unlock, whether the unlock succeeds or fails, and after its
+	// caller gave up, on a context of its own with a deadline. One that fails is counted, and the
+	// commit still runs to its end.
+	for _, c := range []struct {
+		name                     string
+		insertFails, unlockFails bool
+	}{
+		{name: "a late insert"},
+		{name: "a late insert that fails", insertFails: true},
+		{name: "a late insert after a failed unlock", unlockFails: true},
+	} {
+		t.Run(c.name, func(t *testing.T) {
+			saved := postCommitUnlockRetryBackoff
+			postCommitUnlockRetryBackoff = time.Millisecond
+
+			t.Cleanup(func() { postCommitUnlockRetryBackoff = saved })
+
+			f := newQuickLaneCommitFixture(t, "QUICK_LANE_LATE_"+c.name)
 			bv, store, client, kind, layout, txs, block := f.bv, f.store, f.client, f.kind, f.layout, f.txs, f.block
 
 			ctx := context.Background()
 			full := &model.Block{Header: block.Header, CoinbaseTx: block.CoinbaseTx, Subtrees: block.Subtrees, TransactionCount: block.TransactionCount, Height: block.Height}
 			require.NoError(t, client.AddBlock(ctx, full, "legacy"), "stored first, without rows")
 
-			late := &lateInsertClient{ClientI: client}
-			if fail {
+			attempt := quickValidateAttempt(t, bv, block, layout, kind, 0, len(layout))
+
+			// The outputs to unlock, so the commit's unlock reaches the store.
+			subtree, err := subtreepkg.NewTreeByLeafCount(4)
+			require.NoError(t, err)
+			require.NoError(t, subtree.AddCoinbaseNode())
+			require.NoError(t, subtree.AddNode(*txs[0].TxIDChainHash(), 0, 0))
+
+			block.SubtreeSlices = []*subtreepkg.Subtree{subtree}
+
+			locks := &lockRecordingStore{Store: store}
+			if c.unlockFails {
+				locks.err = errors.NewStorageError("unlock failed")
+			}
+
+			bv.utxoStore = locks
+
+			late := &lateInsertClient{ClientI: client, unlocks: &locks.unlocks}
+			if c.insertFails {
 				late.err = errors.NewServiceError("insert failed")
 			}
 
 			bv.blockchainClient = late
 			failures := laneMetric(t, "teranode_lane_row_insert_failures_total", "block", lane.BlockPeer)
 
-			gaveUp, cancel := context.WithCancel(quickValidateAttempt(t, bv, block, layout, kind, 0, len(layout)))
+			gaveUp, cancel := context.WithCancel(attempt)
 			cancel()
 
 			start := time.Now()
-			require.NoError(t, bv.commitBlock(gaveUp, block, "", "test"), "the block is stored either way")
+			err = bv.commitBlock(gaveUp, block, "", "test")
+
+			if c.unlockFails {
+				require.Error(t, err)
+				require.True(t, isBlockCommitted(err), "the block is stored")
+			} else {
+				require.NoError(t, err, "the block is stored either way")
+
+				_, cached := bv.blockExistsCache.Get(*block.Hash())
+				require.True(t, cached, "the commit ran on to its end")
+			}
+
+			require.Equal(t, 1, late.calls, "one insert")
+			require.Positive(t, late.unlocksBefore, "the unlock ran before the insert")
 			require.True(t, late.live, "the insert runs although the caller gave up")
 			require.WithinDuration(t, start.Add(quickLaneLateInsertTimeout), late.deadline, 5*time.Second)
-
-			_, cached := bv.blockExistsCache.Get(*block.Hash())
-			require.True(t, cached, "the commit ran on to its end")
 
 			_, meta, err := client.GetBlockHeader(ctx, block.Hash())
 			require.NoError(t, err)
@@ -823,7 +863,7 @@ func TestQuickValidatedBlockCommit(t *testing.T) {
 			rows, err := client.LaneMapRows(ctx, meta.ID)
 			require.NoError(t, err)
 
-			if fail {
+			if c.insertFails {
 				require.Empty(t, rows)
 				require.Equal(t, failures+1, laneMetric(t, "teranode_lane_row_insert_failures_total", "block", lane.BlockPeer))
 
@@ -834,6 +874,24 @@ func TestQuickValidatedBlockCommit(t *testing.T) {
 			require.Equal(t, failures, laneMetric(t, "teranode_lane_row_insert_failures_total", "block", lane.BlockPeer))
 		})
 	}
+
+	t.Run("a commit with no rows sends no late insert", func(t *testing.T) {
+		f := newQuickLaneCommitFixture(t, "QUICK_LANE_LATE_NONE")
+		bv, client, kind, layout, block := f.bv, f.client, f.kind, f.layout, f.block
+
+		ctx := context.Background()
+		full := &model.Block{Header: block.Header, CoinbaseTx: block.CoinbaseTx, Subtrees: block.Subtrees, TransactionCount: block.TransactionCount, Height: block.Height}
+		require.NoError(t, client.AddBlock(ctx, full, "legacy"), "stored first, without rows")
+
+		quickValidateAttempt(t, bv, block, layout, kind, 0, len(layout))
+
+		late := &lateInsertClient{ClientI: client}
+		bv.blockchainClient = late
+
+		// A context with no position collection builds no rows.
+		require.NoError(t, bv.commitBlock(ctx, block, "", "test"))
+		require.Zero(t, late.calls)
+	})
 
 	t.Run("a failed position read stores the block without rows", func(t *testing.T) {
 		f := newQuickLaneCommitFixture(t, "QUICK_LANE_READ_FAILS")
@@ -863,12 +921,21 @@ func TestQuickValidatedBlockCommit(t *testing.T) {
 type lateInsertClient struct {
 	blockchain.ClientI
 	err      error
+	calls    int
 	deadline time.Time
 	live     bool
+	// unlocks, when set, counts the unlocks, and unlocksBefore is its value when the insert began.
+	unlocks       *atomic.Int32
+	unlocksBefore int32
 }
 
 func (c *lateInsertClient) InsertLaneMapRows(ctx context.Context, hash *chainhash.Hash, rows []lane.MapRow) error {
+	c.calls++
 	c.deadline, _ = ctx.Deadline()
+
+	if c.unlocks != nil {
+		c.unlocksBefore = c.unlocks.Load()
+	}
 	c.live = ctx.Err() == nil
 
 	if c.err != nil {
@@ -876,6 +943,19 @@ func (c *lateInsertClient) InsertLaneMapRows(ctx context.Context, hash *chainhas
 	}
 
 	return c.ClientI.InsertLaneMapRows(ctx, hash, rows)
+}
+
+// lockRecordingStore counts each unlock, and fails it with err.
+type lockRecordingStore struct {
+	utxo.Store
+	err     error
+	unlocks atomic.Int32
+}
+
+func (s *lockRecordingStore) SetLocked(context.Context, []chainhash.Hash, bool) error {
+	s.unlocks.Add(1)
+
+	return s.err
 }
 
 // withQuickLaneBlockchain gives bv a blockchain client over a fresh SQLite blockchain store.
