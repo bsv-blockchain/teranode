@@ -24,7 +24,8 @@ import (
 // the position the store took for this attempt was burned, not written. The rows are the ones P2
 // builds: one Roaring bitmap per lane, turned into map rows by lane.BuildBlockRows, with the
 // coinbase left out, since block assembly creates it. A redone block reads back every record the
-// first attempt wrote, so it gets the same rows and no record a second position.
+// first attempt wrote, so on utxoset and Aerospike it gets the same rows, and no record takes a
+// second position.
 
 // quickLanePendingMax is how many positions a block's collection holds unsorted, at 8 bytes each,
 // before it adds them to its per-lane bitmaps. The bitmaps' own size depends on how the positions
