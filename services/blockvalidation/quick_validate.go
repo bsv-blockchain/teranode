@@ -2609,7 +2609,7 @@ func (u *BlockValidation) createAndSpendUTXOsForBatch(ctx context.Context, block
 
 	lanes := quickLanePositionsFrom(ctx)
 
-	if applyErr == nil && len(unspendableTxs) > 0 {
+	if applyErr == nil && lanes != nil && len(unspendableTxs) > 0 {
 		// They are stored without a record, so they take no lane position and the rows leave them
 		// out, unless one was stored before; see readSkippedLanePositions.
 		skipped := make([]*chainhash.Hash, len(unspendableTxs))

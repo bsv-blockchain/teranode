@@ -18,6 +18,7 @@ import (
 	txmap "github.com/bsv-blockchain/go-tx-map"
 	"github.com/bsv-blockchain/teranode/errors"
 	"github.com/bsv-blockchain/teranode/model"
+	"github.com/bsv-blockchain/teranode/settings"
 	"github.com/bsv-blockchain/teranode/stores/utxo"
 	"github.com/bsv-blockchain/teranode/stores/utxo/fields"
 	"github.com/bsv-blockchain/teranode/stores/utxo/meta"
@@ -252,16 +253,7 @@ func newListHarness(t *testing.T, dbName string, outpointOnly bool) (*BlockValid
 
 	recorder := &applyRecorder{Store: realStore}
 
-	bv := &BlockValidation{
-		logger:                        logger,
-		settings:                      tSettings,
-		blockHashesCurrentlyValidated: txmap.NewSwissMap(0),
-		blockExistsCache:              expiringmap.New[chainhash.Hash, bool](120 * time.Minute),
-		utxoStore:                     recorder,
-		lastValidatedBlocks:           expiringmap.New[chainhash.Hash, *model.Block](2 * time.Minute),
-		blocksCurrentlyValidating:     txmap.NewSyncedMap[chainhash.Hash, *validationResult](),
-		spendRetryBackoff:             time.Millisecond,
-	}
+	bv := newQuickTestBlockValidation(tSettings, recorder)
 
 	cleanup := func() {
 		bv.blockExistsCache.Stop()
@@ -270,6 +262,21 @@ func newListHarness(t *testing.T, dbName string, outpointOnly bool) (*BlockValid
 	}
 
 	return bv, recorder, cleanup
+}
+
+// newQuickTestBlockValidation is the BlockValidation the quick-validation tests apply batches with,
+// over store; the caller stops its caches.
+func newQuickTestBlockValidation(tSettings *settings.Settings, store utxo.Store) *BlockValidation {
+	return &BlockValidation{
+		logger:                        ulogger.TestLogger{},
+		settings:                      tSettings,
+		blockHashesCurrentlyValidated: txmap.NewSwissMap(0),
+		blockExistsCache:              expiringmap.New[chainhash.Hash, bool](120 * time.Minute),
+		utxoStore:                     store,
+		lastValidatedBlocks:           expiringmap.New[chainhash.Hash, *model.Block](2 * time.Minute),
+		blocksCurrentlyValidating:     txmap.NewSyncedMap[chainhash.Hash, *validationResult](),
+		spendRetryBackoff:             time.Millisecond,
+	}
 }
 
 // listBatchForErr is listBatchFor without the require dependency. outpointOnly is the
@@ -864,6 +871,8 @@ type flakyTxStore struct {
 	spendOnly bool
 	failTimes atomic.Int32
 }
+
+func (s *flakyTxStore) Unwrap() utxo.Store { return s.Store }
 
 func (s *flakyTxStore) SpendAndCreateMulti(ctx context.Context, txs []*bt.Tx, blockHeight uint32,
 	opts ...utxo.CreateOption) ([]utxo.SpendAndCreateMultiResult, error) {

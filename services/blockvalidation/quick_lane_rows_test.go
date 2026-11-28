@@ -13,7 +13,6 @@ import (
 	"github.com/bsv-blockchain/go-chaincfg"
 	bec "github.com/bsv-blockchain/go-sdk/primitives/ec"
 	subtreepkg "github.com/bsv-blockchain/go-subtree"
-	txmap "github.com/bsv-blockchain/go-tx-map"
 	"github.com/bsv-blockchain/teranode/errors"
 	"github.com/bsv-blockchain/teranode/model"
 	"github.com/bsv-blockchain/teranode/services/blockchain"
@@ -29,7 +28,6 @@ import (
 	tpostgres "github.com/bsv-blockchain/teranode/test/utils/postgres"
 	"github.com/bsv-blockchain/teranode/test/utils/transactions"
 	"github.com/bsv-blockchain/teranode/ulogger"
-	"github.com/bsv-blockchain/teranode/util/expiringmap"
 	"github.com/bsv-blockchain/teranode/util/lane"
 	"github.com/bsv-blockchain/teranode/util/lanereader"
 	testutil "github.com/bsv-blockchain/teranode/util/test"
@@ -63,6 +61,9 @@ func quickLaneStores() []quickLaneStore {
 		{name: "aerospike native", open: func(t *testing.T, s *settings.Settings) utxo.Store { return openQuickLaneAerospike(t, s, true) }},
 		{name: "aerospike one at a time", open: func(t *testing.T, s *settings.Settings) utxo.Store {
 			return listRefusingStore{openQuickLaneAerospike(t, s, false)}
+		}},
+		{name: "aerospike partial retry", open: func(t *testing.T, s *settings.Settings) utxo.Store {
+			return &flakyTxStore{Store: openQuickLaneAerospike(t, s, false), spendOnly: true}
 		}},
 	}
 }
@@ -156,16 +157,7 @@ func newQuickLaneHarness(t *testing.T, kind quickLaneStore) (*BlockValidation, u
 	require.True(t, ok)
 	taker.SetLanePositionSource(source)
 
-	bv := &BlockValidation{
-		logger:                        ulogger.TestLogger{},
-		settings:                      tSettings,
-		blockHashesCurrentlyValidated: txmap.NewSwissMap(0),
-		blockExistsCache:              expiringmap.New[chainhash.Hash, bool](120 * time.Minute),
-		utxoStore:                     store,
-		lastValidatedBlocks:           expiringmap.New[chainhash.Hash, *model.Block](2 * time.Minute),
-		blocksCurrentlyValidating:     txmap.NewSyncedMap[chainhash.Hash, *validationResult](),
-		spendRetryBackoff:             time.Millisecond,
-	}
+	bv := newQuickTestBlockValidation(tSettings, store)
 
 	t.Cleanup(func() {
 		bv.blockExistsCache.Stop()
@@ -286,10 +278,22 @@ func TestQuickValidationLaneRowsAreTheRecordsPositions(t *testing.T) {
 				root, key := seedRoot(t, store, 4, "QUICK_LANE_ONE_"+kind.name)
 				layout, txs, block := quickLaneBlock(t, key, root)
 
+				// a1's spend fails once after its create, so the retry carries its parent a0 back
+				// as existing; a0's position comes from the first pass.
+				flaky, partial := store.(*flakyTxStore)
+				if partial {
+					flaky.fail = *txs[1].TxIDChainHash()
+					flaky.failTimes.Store(1)
+				}
+
 				mismatches := laneMetric(t, "teranode_lane_row_count_mismatches_total", "", "")
 
 				ctx := quickValidateAttempt(t, bv, block, layout, kind, 0, len(layout))
 				positions := storedLanePositions(t, store, txs)
+
+				if partial {
+					require.LessOrEqual(t, flaky.failTimes.Load(), int32(0), "the fault fired")
+				}
 
 				require.Equal(t, rowsOf(t, positions), bv.quickLaneRows(ctx, block))
 				require.NotContains(t, positions, storedLanePositions(t, store, []*bt.Tx{root})[0], "the rows hold the block's records only")
