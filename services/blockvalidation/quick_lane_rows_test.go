@@ -154,12 +154,7 @@ func newQuickLaneHarness(t *testing.T, kind quickLaneStore) (*BlockValidation, u
 	require.True(t, ok)
 	taker.SetLanePositionSource(source)
 
-	bv := newQuickTestBlockValidation(tSettings, store)
-
-	t.Cleanup(func() {
-		bv.blockExistsCache.Stop()
-		bv.lastValidatedBlocks.Stop()
-	})
+	bv := newQuickTestBlockValidation(t, tSettings, store)
 
 	return bv, store, source
 }

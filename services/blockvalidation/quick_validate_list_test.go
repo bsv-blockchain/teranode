@@ -248,15 +248,9 @@ func newListHarness(t *testing.T, dbName string, outpointOnly bool) (*BlockValid
 
 	recorder := &applyRecorder{Store: realStore}
 
-	bv := newQuickTestBlockValidation(tSettings, recorder)
+	bv := newQuickTestBlockValidation(t, tSettings, recorder)
 
-	cleanup := func() {
-		bv.blockExistsCache.Stop()
-		bv.lastValidatedBlocks.Stop()
-		cancel()
-	}
-
-	return bv, recorder, cleanup
+	return bv, recorder, cancel
 }
 
 // quickTestSettings are the test settings, with outpointOnly in the below-checkpoint mode: the
@@ -275,9 +269,11 @@ func quickTestSettings(t *testing.T, outpointOnly bool) *settings.Settings {
 }
 
 // newQuickTestBlockValidation is the BlockValidation the quick-validation tests apply batches with,
-// over store; the caller stops its caches.
-func newQuickTestBlockValidation(tSettings *settings.Settings, store utxo.Store) *BlockValidation {
-	return &BlockValidation{
+// over store; its caches stop when the test ends.
+func newQuickTestBlockValidation(t *testing.T, tSettings *settings.Settings, store utxo.Store) *BlockValidation {
+	t.Helper()
+
+	bv := &BlockValidation{
 		logger:                        ulogger.TestLogger{},
 		settings:                      tSettings,
 		blockHashesCurrentlyValidated: txmap.NewSwissMap(0),
@@ -287,6 +283,13 @@ func newQuickTestBlockValidation(tSettings *settings.Settings, store utxo.Store)
 		blocksCurrentlyValidating:     txmap.NewSyncedMap[chainhash.Hash, *validationResult](),
 		spendRetryBackoff:             time.Millisecond,
 	}
+
+	t.Cleanup(func() {
+		bv.blockExistsCache.Stop()
+		bv.lastValidatedBlocks.Stop()
+	})
+
+	return bv
 }
 
 // listBatchForErr is listBatchFor without the require dependency. outpointOnly is the
