@@ -526,19 +526,12 @@ func laneServiceMetric(t *testing.T, metric, service string) float64 {
 // commitBlock stores a quick-validated block's rows, so the lane reader answers its transactions
 // mined once it is deep enough, and the pruner's lane rule settles a parent of it spent in it.
 func TestQuickValidatedBlockThroughTheLaneReaderAndPruner(t *testing.T) {
-	initPrometheusMetrics()
-
-	kind := quickLaneStores()[0]
-	bv, store, _ := newQuickLaneHarness(t, kind)
+	f := newQuickLaneCommitFixture(t, "QUICK_LANE_READER")
+	bv, store, client, kind, layout, txs, block := f.bv, f.store, f.client, f.kind, f.layout, f.txs, f.block
+	blockChainStore := f.blockChainStore
 
 	ctx := context.Background()
 	logger := ulogger.TestLogger{}
-
-	blockChainStore, client := withQuickLaneBlockchain(t, bv)
-
-	root, key := seedRoot(t, store, 4, "QUICK_LANE_READER")
-	layout, txs, fixture := quickLaneBlock(t, key, root)
-	block := quickLaneFirstBlock(t, bv, client, fixture)
 
 	attempt := quickValidateAttempt(t, bv, block, layout, kind, 0, len(layout))
 	require.NoError(t, bv.commitBlock(attempt, block, "", "test"))
@@ -586,18 +579,10 @@ func TestQuickValidatedBlockThroughTheLaneReaderAndPruner(t *testing.T) {
 
 // A block whose existing records' positions cannot be read is still stored, without rows.
 func TestQuickValidatedBlockIsStoredWithoutRowsWhenAPositionReadFails(t *testing.T) {
-	initPrometheusMetrics()
-
-	kind := quickLaneStores()[0]
-	bv, store, _ := newQuickLaneHarness(t, kind)
+	f := newQuickLaneCommitFixture(t, "QUICK_LANE_READ_FAILS")
+	bv, store, client, kind, layout, block := f.bv, f.store, f.client, f.kind, f.layout, f.block
 
 	ctx := context.Background()
-
-	_, client := withQuickLaneBlockchain(t, bv)
-
-	root, key := seedRoot(t, store, 4, "QUICK_LANE_READ_FAILS")
-	layout, _, fixture := quickLaneBlock(t, key, root)
-	block := quickLaneFirstBlock(t, bv, client, fixture)
 
 	// The first attempt is cut off after its first subtree, so the redo finds those records.
 	quickValidateAttempt(t, bv, block, layout, kind, 0, 1)
@@ -629,6 +614,38 @@ func withQuickLaneBlockchain(t *testing.T, bv *BlockValidation) (blockchain_stor
 	bv.blockchainClient = client
 
 	return blockChainStore, client
+}
+
+// quickLaneCommitFixture is a quick-validation block over a utxoset store at shadow, as block 1 of a
+// real SQLite blockchain store, with its ID reserved, ready for an attempt and commitBlock.
+type quickLaneCommitFixture struct {
+	bv              *BlockValidation
+	store           utxo.Store
+	blockChainStore blockchain_store.Store
+	client          blockchain.ClientI
+	kind            quickLaneStore
+	layout          [][]*bt.Tx
+	txs             []*bt.Tx
+	block           *model.Block
+}
+
+func newQuickLaneCommitFixture(t *testing.T, seed string) quickLaneCommitFixture {
+	t.Helper()
+
+	initPrometheusMetrics()
+
+	f := quickLaneCommitFixture{kind: quickLaneStores()[0]}
+	f.bv, f.store, _ = newQuickLaneHarness(t, f.kind)
+	f.blockChainStore, f.client = withQuickLaneBlockchain(t, f.bv)
+
+	root, key := seedRoot(t, f.store, 4, seed)
+
+	var fixture *model.Block
+
+	f.layout, f.txs, fixture = quickLaneBlock(t, key, root)
+	f.block = quickLaneFirstBlock(t, f.bv, f.client, fixture)
+
+	return f
 }
 
 // quickLaneFirstBlock is fixture as block 1 on genesis, with the ID quick validation reserves for it.
