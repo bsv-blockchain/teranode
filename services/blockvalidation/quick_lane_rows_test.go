@@ -10,7 +10,6 @@ import (
 	"github.com/bsv-blockchain/go-bt/v2"
 	"github.com/bsv-blockchain/go-bt/v2/bscript"
 	"github.com/bsv-blockchain/go-bt/v2/chainhash"
-	"github.com/bsv-blockchain/go-chaincfg"
 	bec "github.com/bsv-blockchain/go-sdk/primitives/ec"
 	subtreepkg "github.com/bsv-blockchain/go-subtree"
 	"github.com/bsv-blockchain/teranode/errors"
@@ -144,10 +143,8 @@ func openQuickLaneAerospike(t *testing.T, tSettings *settings.Settings, native b
 func newQuickLaneHarness(t *testing.T, kind quickLaneStore) (*BlockValidation, utxo.Store, *quickLaneSource) {
 	t.Helper()
 
-	tSettings := testutil.CreateBaseTestSettings(t)
+	tSettings := quickTestSettings(t, true)
 	tSettings.UtxoStore.LaneMigration = settings.LaneMigrationShadow
-	tSettings.BlockValidation.OutpointOnlyBelowCheckpoint = true
-	tSettings.ChainCfgParams.Checkpoints = []chaincfg.Checkpoint{{Height: 1000}}
 
 	store := kind.open(t, tSettings)
 

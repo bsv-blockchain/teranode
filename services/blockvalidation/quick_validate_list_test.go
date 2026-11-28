@@ -237,12 +237,7 @@ func newListHarness(t *testing.T, dbName string, outpointOnly bool) (*BlockValid
 	ctx, cancel := context.WithTimeout(context.Background(), 60*time.Second)
 
 	logger := ulogger.TestLogger{}
-	tSettings := testutil.CreateBaseTestSettings(t)
-
-	if outpointOnly {
-		tSettings.BlockValidation.OutpointOnlyBelowCheckpoint = true
-		tSettings.ChainCfgParams.Checkpoints = []chaincfg.Checkpoint{{Height: 1000}}
-	}
+	tSettings := quickTestSettings(t, outpointOnly)
 
 	storeURL, err := url.Parse("sqlitememory:///" + dbName)
 	require.NoError(t, err)
@@ -262,6 +257,21 @@ func newListHarness(t *testing.T, dbName string, outpointOnly bool) (*BlockValid
 	}
 
 	return bv, recorder, cleanup
+}
+
+// quickTestSettings are the test settings, with outpointOnly in the below-checkpoint mode: the
+// operator flag on and a checkpoint at 1000, above the fixture blocks.
+func quickTestSettings(t *testing.T, outpointOnly bool) *settings.Settings {
+	t.Helper()
+
+	tSettings := testutil.CreateBaseTestSettings(t)
+
+	if outpointOnly {
+		tSettings.BlockValidation.OutpointOnlyBelowCheckpoint = true
+		tSettings.ChainCfgParams.Checkpoints = []chaincfg.Checkpoint{{Height: 1000}}
+	}
+
+	return tSettings
 }
 
 // newQuickTestBlockValidation is the BlockValidation the quick-validation tests apply batches with,

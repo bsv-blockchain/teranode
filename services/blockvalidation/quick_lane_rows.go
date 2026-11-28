@@ -221,7 +221,7 @@ func (u *BlockValidation) readLanePositions(ctx context.Context, q *quickLanePos
 	g, gCtx := errgroup.WithContext(ctx)
 	g.SetLimit(quickLaneReadConcurrency)
 
-	for start := 0; start < len(hashes) && gCtx.Err() == nil; start += quickLaneReadChunk {
+	for start := 0; start < len(hashes); start += quickLaneReadChunk {
 		chunk := hashes[start:min(start+quickLaneReadChunk, len(hashes))]
 
 		g.Go(func() error {
