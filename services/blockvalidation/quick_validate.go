@@ -804,8 +804,9 @@ func (u *BlockValidation) commitBlock(ctx context.Context, block *model.Block, p
 		prometheusBlockValidationQuickCommitUnlock.Observe(time.Since(start).Seconds())
 	}
 
-	// After the unlock, so an insert that waits for a lane write lock never keeps outputs locked,
-	// and whatever the unlock's outcome, since no later attempt quick-validates a stored block.
+	// After the unlock attempt, so a successful unlock never waits on the insert. After a failed one
+	// the outputs stay locked while the insert runs, and it still runs, since no later attempt
+	// quick-validates a stored block.
 	if insertRowsLate {
 		u.insertLaneRowsOfStoredBlock(ctx, block, rows, caller)
 	}

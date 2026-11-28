@@ -90,21 +90,35 @@ func TestInsertLaneMapRowsGivesUpWaitingForTheSQLiteLaneLock(t *testing.T) {
 
 	laneWriteMu.Lock()
 
+	// A deadline, then a caller that cancels: each gives up within a second of its 50 ms.
 	ctx, cancel := context.WithTimeout(t.Context(), 50*time.Millisecond)
 	start := time.Now()
 	err = s.InsertLaneMapRows(ctx, 1_000, rows)
 
 	cancel()
-	laneWriteMu.Unlock()
 
-	require.Error(t, err)
-	require.Less(t, time.Since(start), 5*time.Second, "it gave up at its deadline")
+	require.ErrorIs(t, err, context.DeadlineExceeded)
+	require.Less(t, time.Since(start), time.Second, "it gave up at its deadline")
+
+	ctx, cancel = context.WithCancel(t.Context())
+	time.AfterFunc(50*time.Millisecond, cancel)
+
+	start = time.Now()
+	err = s.InsertLaneMapRows(ctx, 1_000, rows)
+
+	require.ErrorIs(t, err, context.Canceled)
+	require.Less(t, time.Since(start), time.Second, "it gave up when its caller cancelled")
 
 	none, err := s.LaneMapRows(t.Context(), 1_000)
 	require.NoError(t, err)
 	require.Empty(t, none)
 
+	// Released while an insert waits, the lock goes to it at once.
+	time.AfterFunc(50*time.Millisecond, laneWriteMu.Unlock)
+
+	start = time.Now()
 	require.NoError(t, s.InsertLaneMapRows(t.Context(), 1_000, rows))
+	require.Less(t, time.Since(start), time.Second, "it took the lock soon after it came free")
 
 	got, err := s.LaneMapRows(t.Context(), 1_000)
 	require.NoError(t, err)

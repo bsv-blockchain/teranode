@@ -32,6 +32,7 @@ import (
 	"github.com/bsv-blockchain/teranode/util/lanereader"
 	testutil "github.com/bsv-blockchain/teranode/util/test"
 	"github.com/prometheus/client_golang/prometheus"
+	dto "github.com/prometheus/client_model/go"
 	"github.com/stretchr/testify/require"
 )
 
@@ -746,6 +747,9 @@ func TestQuickValidatedBlockCommit(t *testing.T) {
 
 			bv.subtreeStore = blobmemory.New()
 
+			late := &lateInsertClient{ClientI: client}
+			bv.blockchainClient = late
+
 			ctx := context.Background()
 			failures := laneMetric(t, "teranode_lane_row_insert_failures_total", "block", lane.BlockPeer)
 			absent := laneMetric(t, "teranode_lane_missing_bitmaps_total", "reason", lane.MissingBitmapsAbsent)
@@ -765,6 +769,13 @@ func TestQuickValidatedBlockCommit(t *testing.T) {
 			if !fullFirst {
 				require.Error(t, storeInFull(), "the block is stored already")
 			}
+
+			wantInserts := 0
+			if fullFirst {
+				wantInserts = 1
+			}
+
+			require.Equal(t, wantInserts, late.calls, "a late insert only after AddBlock found the block stored")
 
 			require.Equal(t, absent+float64(len(block.Subtrees)), laneMetric(t, "teranode_lane_missing_bitmaps_total", "reason", lane.MissingBitmapsAbsent), "full validation found no lane bitmaps")
 
@@ -839,21 +850,25 @@ func TestQuickValidatedBlockCommit(t *testing.T) {
 			gaveUp, cancel := context.WithCancel(attempt)
 			cancel()
 
+			unlocked := histogramCount(t, prometheusBlockValidationQuickCommitUnlock)
 			start := time.Now()
 			err = bv.commitBlock(gaveUp, block, "", "test")
 
 			if c.unlockFails {
 				require.Error(t, err)
 				require.True(t, isBlockCommitted(err), "the block is stored")
+				require.Equal(t, unlocked, histogramCount(t, prometheusBlockValidationQuickCommitUnlock), "a failed unlock is not timed")
 			} else {
 				require.NoError(t, err, "the block is stored either way")
+				require.Equal(t, unlocked+1, histogramCount(t, prometheusBlockValidationQuickCommitUnlock), "the unlock is timed")
 
 				_, cached := bv.blockExistsCache.Get(*block.Hash())
 				require.True(t, cached, "the commit ran on to its end")
 			}
 
 			require.Equal(t, 1, late.calls, "one insert")
-			require.Positive(t, late.unlocksBefore, "the unlock ran before the insert")
+			require.Positive(t, late.unlocksBefore, "the unlock reached the store")
+			require.Equal(t, locks.unlocks.Load(), late.unlocksBefore, "every unlock attempt, retries included, ended before the insert began")
 			require.True(t, late.live, "the insert runs although the caller gave up")
 			require.WithinDuration(t, start.Add(quickLaneLateInsertTimeout), late.deadline, 5*time.Second)
 
@@ -943,6 +958,17 @@ func (c *lateInsertClient) InsertLaneMapRows(ctx context.Context, hash *chainhas
 	}
 
 	return c.ClientI.InsertLaneMapRows(ctx, hash, rows)
+}
+
+// histogramCount is how many observations h holds.
+func histogramCount(t *testing.T, h prometheus.Histogram) uint64 {
+	t.Helper()
+
+	var m dto.Metric
+
+	require.NoError(t, h.Write(&m))
+
+	return m.GetHistogram().GetSampleCount()
 }
 
 // lockRecordingStore counts each unlock, and fails it with err.
