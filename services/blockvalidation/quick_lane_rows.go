@@ -12,7 +12,6 @@ import (
 	"github.com/bsv-blockchain/teranode/stores/utxo"
 	"github.com/bsv-blockchain/teranode/stores/utxo/fields"
 	"github.com/bsv-blockchain/teranode/util/lane"
-	"golang.org/x/sync/errgroup"
 )
 
 // Lane rows for a block stored by quick validation, at utxostore_laneMigration shadow (lanes
@@ -35,16 +34,15 @@ import (
 const quickLanePendingMax = 1 << 16
 
 // quickLaneReadChunk is how many records one read of existing records' positions asks for, and
-// quickLaneReadConcurrency how many such reads one batch runs at once.
+// quickLaneReadConcurrency how many such reads run at once across every block (quickLaneReadSlots).
 const (
 	quickLaneReadChunk       = 1024
 	quickLaneReadConcurrency = 8
 )
 
-// quickLaneReadTimeout bounds a batch's read-backs of positions together, so a stalled read stores
-// the block without rows rather than holding it. A store that follows its context, as utxoset does,
-// stops there; Aerospike's batch reads are bounded by its own batch policy. A variable so a test
-// can shorten it.
+// quickLaneReadTimeout bounds a batch's read-backs of positions together: past it the block is
+// stored without rows, whether or not the store has answered (readLanePositions). A variable so a
+// test can shorten it.
 var quickLaneReadTimeout = 30 * time.Second
 
 // quickLanePositions collects the lane positions of one quick-validation attempt of one block. A
@@ -215,9 +213,20 @@ func (u *BlockValidation) readSkippedLanePositions(ctx context.Context, q *quick
 	u.readLanePositions(ctx, q, hashes, true)
 }
 
-// readLanePositions reads hashes' positions in chunks of quickLaneReadChunk, at most
-// quickLaneReadConcurrency at once. notFoundIsNoRecord counts a record not found as none rather
-// than as one without a position.
+// laneChunkRead is one chunk's read-back: the positions read, the records not found when those
+// count as none, and the read's error.
+type laneChunkRead struct {
+	positions []uint64
+	missing   int
+	err       error
+}
+
+// readLanePositions reads hashes' positions in chunks of quickLaneReadChunk and returns by
+// quickLaneReadTimeout, or when ctx ends, whether or not every read has. It does not wait for a
+// read past the deadline, because the Aerospike client does not follow its context: such a read
+// keeps its goroutine and its slot of the pool every block shares (quickLaneReadSlots) until the
+// store answers, its answer is dropped, and the block goes without rows. notFoundIsNoRecord counts
+// a record not found as none rather than as one without a position.
 func (u *BlockValidation) readLanePositions(ctx context.Context, q *quickLanePositions, hashes []*chainhash.Hash, notFoundIsNoRecord bool) {
 	// Once a read has failed the block goes without rows, so nothing more is read for it.
 	if q == nil || len(hashes) == 0 || q.hasFailed() {
@@ -227,62 +236,99 @@ func (u *BlockValidation) readLanePositions(ctx context.Context, q *quickLanePos
 	readCtx, cancel := context.WithTimeout(ctx, quickLaneReadTimeout)
 	defer cancel()
 
-	g, gCtx := errgroup.WithContext(readCtx)
-	g.SetLimit(quickLaneReadConcurrency)
+	chunks := (len(hashes) + quickLaneReadChunk - 1) / quickLaneReadChunk
+
+	// Room for every chunk, so a read that answers after this call returned never blocks.
+	results := make(chan laneChunkRead, chunks)
+
+	go u.dispatchLaneReads(readCtx, hashes, notFoundIsNoRecord, results)
+
+	for got := 0; got < chunks; got++ {
+		select {
+		case r := <-results:
+			q.add(r.positions...)
+			q.addNoRecord(r.missing)
+
+			if r.err != nil {
+				q.fail(r.err)
+
+				return
+			}
+		case <-readCtx.Done():
+			q.fail(readCtx.Err())
+
+			return
+		}
+	}
+}
+
+// quickLaneReadSlots is the slot pool every block's position reads share, quickLaneReadConcurrency
+// slots, so reads stuck in the store hold at most that many: a later block finds no free slot,
+// times out and goes without rows.
+func (u *BlockValidation) quickLaneReadSlots() chan struct{} {
+	u.quickLaneSlotsOnce.Do(func() { u.quickLaneSlots = make(chan struct{}, quickLaneReadConcurrency) })
+
+	return u.quickLaneSlots
+}
+
+// dispatchLaneReads starts one read per chunk of hashes, each once it holds a slot, and stops when
+// readCtx ends; no read starts after that.
+func (u *BlockValidation) dispatchLaneReads(readCtx context.Context, hashes []*chainhash.Hash, notFoundIsNoRecord bool, results chan<- laneChunkRead) {
+	slots := u.quickLaneReadSlots()
 
 	for start := 0; start < len(hashes); start += quickLaneReadChunk {
 		chunk := hashes[start:min(start+quickLaneReadChunk, len(hashes))]
 
-		g.Go(func() error {
-			if err := gCtx.Err(); err != nil {
-				return err
-			}
+		select {
+		case slots <- struct{}{}:
+		case <-readCtx.Done():
+			return
+		}
 
-			items := make([]*utxo.UnresolvedMetaData, 0, len(chunk))
-			for i, h := range chunk {
-				items = append(items, &utxo.UnresolvedMetaData{Hash: *h, Idx: i})
-			}
+		// A slot that came free as the deadline passed can win the select above.
+		if readCtx.Err() != nil {
+			<-slots
 
-			if err := u.utxoStore.BatchDecorate(gCtx, items, fields.LanePosition); err != nil {
-				return err
-			}
+			return
+		}
 
-			positions := make([]uint64, 0, len(items))
-			missing := 0
+		go func() {
+			defer func() { <-slots }()
 
-			var failed error
+			results <- u.readLaneChunk(readCtx, chunk, notFoundIsNoRecord)
+		}()
+	}
+}
 
-			for _, it := range items {
-				switch {
-				case it.Err != nil && !errors.Is(it.Err, errors.ErrTxNotFound):
-					if failed == nil {
-						failed = it.Err
-					}
-				case it.Err != nil && notFoundIsNoRecord:
-					missing++
-				case it.Err == nil && it.Data != nil:
-					positions = append(positions, it.Data.LanePosition)
-				default:
-					positions = append(positions, lane.None)
-				}
-			}
-
-			q.add(positions...)
-			q.addNoRecord(missing)
-
-			return failed
-		})
+// readLaneChunk reads one chunk's positions.
+func (u *BlockValidation) readLaneChunk(readCtx context.Context, chunk []*chainhash.Hash, notFoundIsNoRecord bool) laneChunkRead {
+	items := make([]*utxo.UnresolvedMetaData, 0, len(chunk))
+	for i, h := range chunk {
+		items = append(items, &utxo.UnresolvedMetaData{Hash: *h, Idx: i})
 	}
 
-	err := g.Wait()
-	if err == nil {
-		// A store that does not follow its context can answer after the bound.
-		err = readCtx.Err()
+	if err := u.utxoStore.BatchDecorate(readCtx, items, fields.LanePosition); err != nil {
+		return laneChunkRead{err: err}
 	}
 
-	if err != nil {
-		q.fail(err)
+	r := laneChunkRead{positions: make([]uint64, 0, len(items))}
+
+	for _, it := range items {
+		switch {
+		case it.Err != nil && !errors.Is(it.Err, errors.ErrTxNotFound):
+			if r.err == nil {
+				r.err = it.Err
+			}
+		case it.Err != nil && notFoundIsNoRecord:
+			r.missing++
+		case it.Err == nil && it.Data != nil:
+			r.positions = append(r.positions, it.Data.LanePosition)
+		default:
+			r.positions = append(r.positions, lane.None)
+		}
 	}
+
+	return r
 }
 
 // quickLaneRows builds the lane map rows of block from the positions its quick validation

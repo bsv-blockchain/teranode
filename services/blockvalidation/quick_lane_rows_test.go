@@ -390,8 +390,11 @@ type decorateFailingStore struct {
 	// late, with stall, answers without error once the context has ended, as a store that does
 	// not follow its context answers after the bound.
 	late bool
-	// deadline, when set, records the deadline of the context the store was given.
-	deadline *time.Time
+	// deadline, when set, receives the deadline of the context the store was given.
+	deadline chan time.Time
+	// hold, when set, blocks every call until it is closed, whatever the context says, as an
+	// Aerospike batch read does.
+	hold chan struct{}
 }
 
 func (s decorateFailingStore) BatchDecorate(ctx context.Context, items []*utxo.UnresolvedMetaData, _ ...fields.FieldName) error {
@@ -400,7 +403,12 @@ func (s decorateFailingStore) BatchDecorate(ctx context.Context, items []*utxo.U
 	}
 
 	if s.deadline != nil {
-		*s.deadline, _ = ctx.Deadline()
+		d, _ := ctx.Deadline()
+		s.deadline <- d
+	}
+
+	if s.hold != nil {
+		<-s.hold
 	}
 
 	if s.stall {
@@ -467,7 +475,7 @@ func TestQuickLanePositionsCollect(t *testing.T) {
 		{whole: errors.NewStorageError("decorate failed")},
 		{item: errors.NewStorageError("record unreadable")},
 	} {
-		bv.utxoStore = store
+		bv = &BlockValidation{logger: ulogger.TestLogger{}, settings: tSettings, utxoStore: store}
 		failures := laneMetric(t, "teranode_lane_row_insert_failures_total", "", "")
 		unpositioned = laneTxsWithoutPosition(t)
 
@@ -489,27 +497,39 @@ func TestQuickLanePositionsCollect(t *testing.T) {
 
 	t.Cleanup(func() { quickLaneReadTimeout = timeout })
 
-	var deadline time.Time
+	deadline := make(chan time.Time, 1)
 
-	bv.utxoStore = decorateFailingStore{stall: true, deadline: &deadline}
+	bv = &BlockValidation{logger: ulogger.TestLogger{}, settings: tSettings, utxoStore: decorateFailingStore{stall: true, deadline: deadline}}
 	ctx = bv.withQuickLanePositions(context.Background())
 	quickLanePositionsFrom(ctx).add(lane.Pack(7, 1))
 
 	start := time.Now()
 	bv.readExistingLanePositions(ctx, quickLanePositionsFrom(ctx), []*chainhash.Hash{{0x01}})
-	require.WithinDuration(t, start.Add(quickLaneReadTimeout), deadline, 20*time.Millisecond, "the store is given the bound")
+	require.WithinDuration(t, start.Add(quickLaneReadTimeout), <-deadline, 20*time.Millisecond, "the store is given the bound")
 	require.Nil(t, bv.quickLaneRows(ctx, block))
 
-	bv.utxoStore = decorateFailingStore{stall: true, late: true}
+	bv = &BlockValidation{logger: ulogger.TestLogger{}, settings: tSettings, utxoStore: decorateFailingStore{stall: true, late: true}}
 	ctx = bv.withQuickLanePositions(context.Background())
 	quickLanePositionsFrom(ctx).add(lane.Pack(7, 1))
 	bv.readExistingLanePositions(ctx, quickLanePositionsFrom(ctx), []*chainhash.Hash{{0x01}})
 	require.Nil(t, bv.quickLaneRows(ctx, block), "an answer after the bound does not count")
 
+	// A store that ignores its context does not hold the block past the bound.
+	hold := make(chan struct{})
+	t.Cleanup(func() { close(hold) })
+
+	bv = &BlockValidation{logger: ulogger.TestLogger{}, settings: tSettings, utxoStore: decorateFailingStore{hold: hold}}
+	ctx = bv.withQuickLanePositions(context.Background())
+
+	start = time.Now()
+	bv.readExistingLanePositions(ctx, quickLanePositionsFrom(ctx), []*chainhash.Hash{{0x01}})
+	require.Less(t, time.Since(start), 10*quickLaneReadTimeout, "the read returns at the bound")
+	require.True(t, quickLanePositionsFrom(ctx).hasFailed())
+
 	// After a failed read no further chunk is read, in this batch or a later one.
 	var calls atomic.Int32
 
-	bv.utxoStore = decorateFailingStore{whole: errors.NewStorageError("decorate failed"), calls: &calls}
+	bv = &BlockValidation{logger: ulogger.TestLogger{}, settings: tSettings, utxoStore: decorateFailingStore{whole: errors.NewStorageError("decorate failed"), calls: &calls}}
 	ctx = bv.withQuickLanePositions(context.Background())
 	hashes := make([]*chainhash.Hash, 40*quickLaneReadChunk)
 
@@ -525,7 +545,7 @@ func TestQuickLanePositionsCollect(t *testing.T) {
 	require.Equal(t, before, calls.Load(), "a later batch reads nothing")
 
 	// A record not found is one without a position; the rest of the rows still go.
-	bv.utxoStore = decorateFailingStore{item: errors.NewTxNotFoundError("gone")}
+	bv = &BlockValidation{logger: ulogger.TestLogger{}, settings: tSettings, utxoStore: decorateFailingStore{item: errors.NewTxNotFoundError("gone")}}
 	unpositioned = laneTxsWithoutPosition(t)
 
 	ctx = bv.withQuickLanePositions(context.Background())
