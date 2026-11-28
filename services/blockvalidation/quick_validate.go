@@ -2609,6 +2609,16 @@ func (u *BlockValidation) createAndSpendUTXOsForBatch(ctx context.Context, block
 
 	lanes := quickLanePositionsFrom(ctx)
 
+	// The batch's read-backs of lane positions share one deadline (quickLaneReadTimeout).
+	laneCtx := ctx
+
+	if lanes != nil {
+		var cancelLane context.CancelFunc
+
+		laneCtx, cancelLane = context.WithTimeout(ctx, quickLaneReadTimeout)
+		defer cancelLane()
+	}
+
 	if applyErr == nil && lanes != nil && len(unspendableTxs) > 0 {
 		// They are stored without a record, so they take no lane position and the rows leave them
 		// out, unless one was stored before; see readSkippedLanePositions.
@@ -2617,7 +2627,7 @@ func (u *BlockValidation) createAndSpendUTXOsForBatch(ctx context.Context, block
 			skipped[i] = tx.TxIDChainHash()
 		}
 
-		u.readSkippedLanePositions(ctx, lanes, skipped)
+		u.readSkippedLanePositions(laneCtx, lanes, skipped)
 	}
 
 	// Logged on the failure path too: how long the list ran for is the first thing anyone
@@ -2656,7 +2666,7 @@ func (u *BlockValidation) createAndSpendUTXOsForBatch(ctx context.Context, block
 
 		// The lane position the store took for an existing transaction on this attempt was
 		// burned, so its record's own position is read back for the block's rows.
-		u.readExistingLanePositions(ctx, lanes, hashes)
+		u.readExistingLanePositions(laneCtx, lanes, hashes)
 	}
 
 	return nil

@@ -41,8 +41,8 @@ const (
 	quickLaneReadConcurrency = 8
 )
 
-// quickLaneReadTimeout bounds one batch's read-back of positions, so a stalled read stores the
-// block without rows rather than holding it. A store that follows its context, as utxoset does,
+// quickLaneReadTimeout bounds a batch's read-backs of positions together, so a stalled read stores
+// the block without rows rather than holding it. A store that follows its context, as utxoset does,
 // stops there; Aerospike's batch reads are bounded by its own batch policy. A variable so a test
 // can shorten it.
 var quickLaneReadTimeout = 30 * time.Second
@@ -274,7 +274,13 @@ func (u *BlockValidation) readLanePositions(ctx context.Context, q *quickLanePos
 		})
 	}
 
-	if err := g.Wait(); err != nil {
+	err := g.Wait()
+	if err == nil {
+		// A store that does not follow its context can answer after the bound.
+		err = readCtx.Err()
+	}
+
+	if err != nil {
 		q.fail(err)
 	}
 }
