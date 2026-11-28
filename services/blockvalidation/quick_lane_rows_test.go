@@ -523,7 +523,7 @@ func TestQuickLanePositionsCollect(t *testing.T) {
 
 	start = time.Now()
 	bv.readExistingLanePositions(ctx, quickLanePositionsFrom(ctx), []*chainhash.Hash{{0x01}})
-	require.Less(t, time.Since(start), 4*quickLaneReadTimeout, "the read returns at the bound")
+	require.Less(t, time.Since(start), 2*quickLaneReadTimeout, "the read returns at the bound")
 	require.True(t, quickLanePositionsFrom(ctx).hasFailed())
 
 	// Reads stuck in such a store hold at most the shared slots: a later attempt starts no read,
@@ -556,10 +556,12 @@ func TestQuickLanePositionsCollect(t *testing.T) {
 		return !quickLanePositionsFrom(ctx).hasFailed()
 	}, time.Second, 10*time.Millisecond, "the slots serve again")
 
-	// After a failed read no further chunk is read, in this batch or a later one.
+	// After a failed read no further chunk is read, in this batch or a later one. The first read
+	// fails; the rest hold until released, so the reads in flight are the slots' worth.
 	var calls atomic.Int32
 
-	bv = &BlockValidation{logger: ulogger.TestLogger{}, settings: tSettings, utxoStore: decorateFailingStore{whole: errors.NewStorageError("decorate failed"), calls: &calls}}
+	release := make(chan struct{})
+	bv = &BlockValidation{logger: ulogger.TestLogger{}, settings: tSettings, utxoStore: firstFailsStore{calls: &calls, release: release}}
 	ctx = bv.withQuickLanePositions(context.Background())
 	hashes := make([]*chainhash.Hash, 40*quickLaneReadChunk)
 
@@ -568,7 +570,9 @@ func TestQuickLanePositionsCollect(t *testing.T) {
 	}
 
 	bv.readExistingLanePositions(ctx, quickLanePositionsFrom(ctx), hashes)
-	require.LessOrEqual(t, calls.Load(), int32(2*quickLaneReadConcurrency), "the reads stop once one has failed")
+	require.True(t, quickLanePositionsFrom(ctx).hasFailed())
+	close(release)
+	require.LessOrEqual(t, calls.Load(), int32(quickLaneReadConcurrency), "the reads stop once one has failed")
 
 	// Reads already started may still land on the first store; a later batch reaches none.
 	var later atomic.Int32
@@ -587,6 +591,23 @@ func TestQuickLanePositionsCollect(t *testing.T) {
 
 	require.Equal(t, rowsOf(t, []uint64{lane.Pack(7, 1)}), bv.quickLaneRows(ctx, block))
 	require.Equal(t, unpositioned+1, laneTxsWithoutPosition(t))
+}
+
+// firstFailsStore fails its first BatchDecorate and holds every later one until release is closed.
+type firstFailsStore struct {
+	utxo.Store
+	calls   *atomic.Int32
+	release chan struct{}
+}
+
+func (s firstFailsStore) BatchDecorate(context.Context, []*utxo.UnresolvedMetaData, ...fields.FieldName) error {
+	if s.calls.Add(1) == 1 {
+		return errors.NewStorageError("decorate failed")
+	}
+
+	<-s.release
+
+	return errors.NewStorageError("decorate failed")
 }
 
 // laneTxsWithoutPosition is teranode_lane_txs_without_position_total for quick validation.

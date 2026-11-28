@@ -279,7 +279,8 @@ func (u *BlockValidation) quickLaneReadSlots() chan struct{} {
 }
 
 // dispatchLaneReads starts one read per chunk of hashes, each once it holds a slot, and stops when
-// readCtx ends; no read starts after that.
+// readCtx ends. It and each read check readCtx before the store call, so a read that starts as the
+// deadline passes is the only one that can still reach the store.
 func (u *BlockValidation) dispatchLaneReads(readCtx context.Context, hashes []*chainhash.Hash, notFoundIsNoRecord bool, results chan<- laneChunkRead) {
 	slots := u.quickLaneReadSlots()
 
@@ -301,6 +302,12 @@ func (u *BlockValidation) dispatchLaneReads(readCtx context.Context, hashes []*c
 
 		go func() {
 			defer func() { <-slots }()
+
+			if err := readCtx.Err(); err != nil {
+				results <- laneChunkRead{err: err}
+
+				return
+			}
 
 			results <- u.readLaneChunk(readCtx, chunk, notFoundIsNoRecord)
 		}()
