@@ -523,8 +523,38 @@ func TestQuickLanePositionsCollect(t *testing.T) {
 
 	start = time.Now()
 	bv.readExistingLanePositions(ctx, quickLanePositionsFrom(ctx), []*chainhash.Hash{{0x01}})
-	require.Less(t, time.Since(start), 10*quickLaneReadTimeout, "the read returns at the bound")
+	require.Less(t, time.Since(start), 4*quickLaneReadTimeout, "the read returns at the bound")
 	require.True(t, quickLanePositionsFrom(ctx).hasFailed())
+
+	// Reads stuck in such a store hold at most the shared slots: a later attempt starts no read,
+	// times out, and the slots serve again once the store answers.
+	var started atomic.Int32
+
+	stuck := make(chan struct{})
+	bv = &BlockValidation{logger: ulogger.TestLogger{}, settings: tSettings, utxoStore: decorateFailingStore{hold: stuck, calls: &started}}
+	stuckHashes := make([]*chainhash.Hash, quickLaneReadConcurrency*quickLaneReadChunk)
+
+	for i := range stuckHashes {
+		stuckHashes[i] = &chainhash.Hash{byte(i), byte(i >> 8)}
+	}
+
+	ctx = bv.withQuickLanePositions(context.Background())
+	bv.readExistingLanePositions(ctx, quickLanePositionsFrom(ctx), stuckHashes)
+	require.Eventually(t, func() bool { return started.Load() == quickLaneReadConcurrency }, time.Second, time.Millisecond)
+
+	ctx = bv.withQuickLanePositions(context.Background())
+	bv.readExistingLanePositions(ctx, quickLanePositionsFrom(ctx), stuckHashes[:1])
+	require.True(t, quickLanePositionsFrom(ctx).hasFailed(), "no slot was free")
+	require.Equal(t, int32(quickLaneReadConcurrency), started.Load(), "no ninth read started")
+
+	close(stuck)
+
+	require.Eventually(t, func() bool {
+		ctx = bv.withQuickLanePositions(context.Background())
+		bv.readExistingLanePositions(ctx, quickLanePositionsFrom(ctx), stuckHashes[:1])
+
+		return !quickLanePositionsFrom(ctx).hasFailed()
+	}, time.Second, 10*time.Millisecond, "the slots serve again")
 
 	// After a failed read no further chunk is read, in this batch or a later one.
 	var calls atomic.Int32
@@ -540,9 +570,12 @@ func TestQuickLanePositionsCollect(t *testing.T) {
 	bv.readExistingLanePositions(ctx, quickLanePositionsFrom(ctx), hashes)
 	require.LessOrEqual(t, calls.Load(), int32(2*quickLaneReadConcurrency), "the reads stop once one has failed")
 
-	before := calls.Load()
+	// Reads already started may still land on the first store; a later batch reaches none.
+	var later atomic.Int32
+
+	bv = &BlockValidation{logger: ulogger.TestLogger{}, settings: tSettings, utxoStore: decorateFailingStore{calls: &later}}
 	bv.readExistingLanePositions(ctx, quickLanePositionsFrom(ctx), hashes)
-	require.Equal(t, before, calls.Load(), "a later batch reads nothing")
+	require.Zero(t, later.Load(), "a later batch reads nothing")
 
 	// A record not found is one without a position; the rest of the rows still go.
 	bv = &BlockValidation{logger: ulogger.TestLogger{}, settings: tSettings, utxoStore: decorateFailingStore{item: errors.NewTxNotFoundError("gone")}}
