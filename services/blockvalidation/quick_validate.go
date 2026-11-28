@@ -753,6 +753,9 @@ func (u *BlockValidation) commitBlock(ctx context.Context, block *model.Block, p
 		addOpts = append(addOpts, options.WithLaneMapRows(rows))
 	}
 
+	// insertRowsLate is set when AddBlock found the block stored already, so its rows may not be.
+	insertRowsLate := false
+
 	if err := u.blockchainClient.AddBlock(ctx, block, peerID, addOpts...); err != nil {
 		// An AddBlock error does not prove the block was not stored: a deadline or cancel can reach
 		// the client after the blockchain server committed it. Treating a stored block as a local
@@ -774,9 +777,7 @@ func (u *BlockValidation) commitBlock(ctx context.Context, block *model.Block, p
 			// unlock is safe. Finish the commit tail.
 			u.logger.Warnf("[%s][%s] AddBlock returned an error but the block is stored, continuing the commit: %v", caller, block.Hash().String(), err)
 
-			if rows != nil {
-				u.insertLaneRowsOfStoredBlock(ctx, block, rows, caller)
-			}
+			insertRowsLate = rows != nil
 		case ctx.Err() != nil:
 			// The block is not stored yet, but ctx ended, so the server can still be committing it.
 			// Keep the files and abort.
@@ -803,6 +804,12 @@ func (u *BlockValidation) commitBlock(ctx context.Context, block *model.Block, p
 	}
 
 	prometheusBlockValidationQuickCommitUnlock.Observe(time.Since(start).Seconds())
+
+	// After the unlock, so an insert that waits for a lane write lock never keeps outputs locked.
+	if insertRowsLate {
+		u.insertLaneRowsOfStoredBlock(ctx, block, rows, caller)
+	}
+
 	start = time.Now()
 
 	// No updateSubtreesDAH here. The AddBlock above writes subtrees_set and mined_set in the

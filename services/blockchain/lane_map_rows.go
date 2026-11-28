@@ -60,8 +60,10 @@ func laneMapRowsFromProto(rows []*blockchain_api.LaneMapRow) ([]lane.MapRow, err
 }
 
 // insertStoredBlockLaneMapRows stores the lane map rows of the block hash names under the ID the
-// store gave it. The block must be stored, and not as invalid: StoreBlock gives an invalid block no
-// rows either. The store's insert is insert-only, so rows that say what is stored already write
+// store gave it. It refuses a block it does not find stored, or finds stored as invalid, as
+// StoreBlock gives an invalid block no rows. The read and the insert are separate, so a block
+// invalidated or deleted in between keeps the rows, as a block stored with rows and invalidated
+// later does. The store's insert is insert-only, so rows that say what is stored already write
 // nothing and rows that differ fail.
 func insertStoredBlockLaneMapRows(ctx context.Context, store blockchain_store.Store, hash *chainhash.Hash, rows []lane.MapRow) error {
 	_, meta, err := store.GetBlockHeader(ctx, hash)

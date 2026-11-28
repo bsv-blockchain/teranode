@@ -787,6 +787,54 @@ func TestQuickValidatedBlockCommit(t *testing.T) {
 		})
 	}
 
+	// A late insert that fails is counted and the commit still completes; one whose caller has given
+	// up still runs, on a context of its own with a deadline.
+	for _, fail := range []bool{true, false} {
+		t.Run(fmt.Sprintf("a late insert after the caller gave up fails=%t", fail), func(t *testing.T) {
+			f := newQuickLaneCommitFixture(t, fmt.Sprintf("QUICK_LANE_LATE_%t", fail))
+			bv, store, client, kind, layout, txs, block := f.bv, f.store, f.client, f.kind, f.layout, f.txs, f.block
+
+			ctx := context.Background()
+			full := &model.Block{Header: block.Header, CoinbaseTx: block.CoinbaseTx, Subtrees: block.Subtrees, TransactionCount: block.TransactionCount, Height: block.Height}
+			require.NoError(t, client.AddBlock(ctx, full, "legacy"), "stored first, without rows")
+
+			late := &lateInsertClient{ClientI: client}
+			if fail {
+				late.err = errors.NewServiceError("insert failed")
+			}
+
+			bv.blockchainClient = late
+			failures := laneMetric(t, "teranode_lane_row_insert_failures_total", "block", lane.BlockPeer)
+
+			gaveUp, cancel := context.WithCancel(quickValidateAttempt(t, bv, block, layout, kind, 0, len(layout)))
+			cancel()
+
+			start := time.Now()
+			require.NoError(t, bv.commitBlock(gaveUp, block, "", "test"), "the block is stored either way")
+			require.True(t, late.live, "the insert runs although the caller gave up")
+			require.WithinDuration(t, start.Add(quickLaneLateInsertTimeout), late.deadline, 5*time.Second)
+
+			_, cached := bv.blockExistsCache.Get(*block.Hash())
+			require.True(t, cached, "the commit ran on to its end")
+
+			_, meta, err := client.GetBlockHeader(ctx, block.Hash())
+			require.NoError(t, err)
+
+			rows, err := client.LaneMapRows(ctx, meta.ID)
+			require.NoError(t, err)
+
+			if fail {
+				require.Empty(t, rows)
+				require.Equal(t, failures+1, laneMetric(t, "teranode_lane_row_insert_failures_total", "block", lane.BlockPeer))
+
+				return
+			}
+
+			require.Equal(t, rowsOf(t, storedLanePositions(t, store, txs)), rows)
+			require.Equal(t, failures, laneMetric(t, "teranode_lane_row_insert_failures_total", "block", lane.BlockPeer))
+		})
+	}
+
 	t.Run("a failed position read stores the block without rows", func(t *testing.T) {
 		f := newQuickLaneCommitFixture(t, "QUICK_LANE_READ_FAILS")
 		bv, store, client, kind, layout, block := f.bv, f.store, f.client, f.kind, f.layout, f.block
@@ -809,6 +857,25 @@ func TestQuickValidatedBlockCommit(t *testing.T) {
 		require.NoError(t, err)
 		require.Empty(t, rows)
 	})
+}
+
+// lateInsertClient records the context the late lane rows insert ran on, and fails it with err.
+type lateInsertClient struct {
+	blockchain.ClientI
+	err      error
+	deadline time.Time
+	live     bool
+}
+
+func (c *lateInsertClient) InsertLaneMapRows(ctx context.Context, hash *chainhash.Hash, rows []lane.MapRow) error {
+	c.deadline, _ = ctx.Deadline()
+	c.live = ctx.Err() == nil
+
+	if c.err != nil {
+		return c.err
+	}
+
+	return c.ClientI.InsertLaneMapRows(ctx, hash, rows)
 }
 
 // withQuickLaneBlockchain gives bv a blockchain client over a fresh SQLite blockchain store.

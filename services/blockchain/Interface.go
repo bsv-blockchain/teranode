@@ -117,8 +117,8 @@ type ClientI interface {
 	LaneMapRows(ctx context.Context, blockID uint32) ([]lane.MapRow, error)
 
 	// InsertLaneMapRows stores the lane map rows of a block already stored, under the ID the store
-	// gave it. It is insert-only: rows that say what is stored write nothing, rows that differ
-	// fail, and a block that is not stored, or is stored as invalid, takes none.
+	// gave it. It refuses a block it does not find stored, or finds stored as invalid. The insert
+	// is insert-only: rows that say what is stored write nothing, and rows that differ fail.
 	InsertLaneMapRows(ctx context.Context, blockHash *chainhash.Hash, rows []lane.MapRow) error
 
 	// LaneCapGrants returns, for each lane with one, the first grant handed out at or above height,
