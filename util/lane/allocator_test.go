@@ -14,7 +14,9 @@ import (
 	"time"
 
 	"github.com/bsv-blockchain/teranode/errors"
+	"github.com/prometheus/client_golang/prometheus"
 	"github.com/prometheus/client_golang/prometheus/testutil"
+	dto "github.com/prometheus/client_model/go"
 	"github.com/stretchr/testify/require"
 )
 
@@ -408,7 +410,10 @@ func TestAllocatorLateFirstTakeKeepsItsTwoMinuteUseWindow(t *testing.T) {
 	want := a.wantGrantLocked()
 	a.mu.Unlock()
 	require.False(t, want, "an aged-out grant alone asks for nothing before the next take")
+
+	agedOut := laneWaitCount(t, waitAgedOut)
 	require.Equal(t, Pack(0, 3), next(t, a), "switch exactly at the used-grant boundary, to a grant that continues the aged one")
+	require.Equal(t, agedOut+1, laneWaitCount(t, waitAgedOut), "the take waited for the grant after the aged one")
 	require.Equal(t, Settles{First: 1, LastTaken: 2}, src.grantRequests()[0].Settles)
 }
 
@@ -567,6 +572,17 @@ func TestNextFailsAfterClose(t *testing.T) {
 	require.ErrorIs(t, a.Ready(), errors.ErrServiceUnavailable, "a closed allocator is not ready, though its lease was recent")
 }
 
+// laneWaitCount is how many waits teranode_lane_wait_seconds holds for reason.
+func laneWaitCount(t *testing.T, reason string) uint64 {
+	t.Helper()
+
+	var m dto.Metric
+
+	require.NoError(t, prometheusLaneWaitSeconds.WithLabelValues(reason).(prometheus.Metric).Write(&m))
+
+	return m.GetHistogram().GetSampleCount()
+}
+
 // laneMetrics reads the per-process lane counters, which are process-wide, so tests compare deltas.
 type laneMetrics struct{ positions, grants, waits, failures float64 }
 
@@ -595,10 +611,13 @@ func TestAllocatorCountsEveryTakeAndGrant(t *testing.T) {
 	a.takeWait = 100 * time.Millisecond
 
 	before := readLaneMetrics()
+	noLease, usedUp := laneWaitCount(t, waitNoLease), laneWaitCount(t, waitUsedUp)
 
 	for i := uint64(1); i <= 10; i++ {
 		require.Equal(t, Pack(1, i), next(t, a))
 	}
+
+	require.Equal(t, noLease+1, laneWaitCount(t, waitNoLease), "the first take waited for the lease")
 
 	require.Eventually(t, a.hasSpareGrant, 5*time.Second, time.Millisecond)
 	require.Equal(t, laneMetrics{positions: 10, grants: 2, waits: 1}, readLaneMetrics().since(before),
@@ -616,6 +635,7 @@ func TestAllocatorCountsEveryTakeAndGrant(t *testing.T) {
 	_, err := a.Next(context.Background())
 	require.ErrorIs(t, err, errors.ErrServiceUnavailable)
 	require.Equal(t, laneMetrics{waits: 1, failures: 1}, readLaneMetrics().since(before), "the wait ran out")
+	require.Equal(t, usedUp+1, laneWaitCount(t, waitUsedUp), "the wait is timed, under the grant it used up")
 
 	// The caller gives up while it waits.
 	a.takeWait = time.Hour
