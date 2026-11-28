@@ -449,13 +449,15 @@ func TestQuickLanePositionsCollect(t *testing.T) {
 	} {
 		bv.utxoStore = store
 		failures := laneMetric(t, "teranode_lane_row_insert_failures_total", "", "")
+		unpositioned = laneTxsWithoutPosition(t)
 
 		ctx = bv.withQuickLanePositions(context.Background())
-		quickLanePositionsFrom(ctx).add(lane.Pack(7, 1))
+		quickLanePositionsFrom(ctx).add(lane.Pack(7, 1), lane.None)
 		bv.readExistingLanePositions(ctx, quickLanePositionsFrom(ctx), []*chainhash.Hash{{0x01}})
 
 		require.Nil(t, bv.quickLaneRows(ctx, block))
 		require.Equal(t, failures+1, laneMetric(t, "teranode_lane_row_insert_failures_total", "", ""))
+		require.Equal(t, unpositioned+1, laneTxsWithoutPosition(t), "a record without a position is counted though the rows failed")
 	}
 
 	// After a failed read no further chunk is read, in this batch or a later one.

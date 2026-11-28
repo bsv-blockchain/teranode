@@ -282,14 +282,14 @@ func (u *BlockValidation) quickLaneRows(ctx context.Context, block *model.Block)
 	failed, unpositioned, noRecord := q.failed, q.unpositioned, q.noRecord
 	q.mu.Unlock()
 
+	lane.CountTxsWithoutPosition(laneQuickValidationService, unpositioned)
+
 	if failed != nil {
 		lane.CountRowInsertFailure(lane.BlockPeer)
 		u.logger.Warnf("[quickLaneRows][%s] storing the block without lane rows: the lane positions of its existing records could not be read: %v", block.Hash().String(), failed)
 
 		return nil
 	}
-
-	lane.CountTxsWithoutPosition(laneQuickValidationService, unpositioned)
 
 	rows, err := lane.BuildBlockRows([]lane.LaneBitmaps{q.lanes})
 	if err != nil {
