@@ -231,7 +231,7 @@ func (u *BlockValidation) readLanePositions(ctx context.Context, q *quickLanePos
 
 			items := make([]*utxo.UnresolvedMetaData, 0, len(chunk))
 			for i, h := range chunk {
-				items = append(items, &utxo.UnresolvedMetaData{Hash: *h, Idx: i, Fields: []fields.FieldName{fields.LanePosition}})
+				items = append(items, &utxo.UnresolvedMetaData{Hash: *h, Idx: i})
 			}
 
 			if err := u.utxoStore.BatchDecorate(gCtx, items, fields.LanePosition); err != nil {
@@ -241,10 +241,14 @@ func (u *BlockValidation) readLanePositions(ctx context.Context, q *quickLanePos
 			positions := make([]uint64, 0, len(items))
 			missing := 0
 
+			var failed error
+
 			for _, it := range items {
 				switch {
 				case it.Err != nil && !errors.Is(it.Err, errors.ErrTxNotFound):
-					return it.Err
+					if failed == nil {
+						failed = it.Err
+					}
 				case it.Err != nil && notFoundIsNoRecord:
 					missing++
 				case it.Err == nil && it.Data != nil:
@@ -257,7 +261,7 @@ func (u *BlockValidation) readLanePositions(ctx context.Context, q *quickLanePos
 			q.add(positions...)
 			q.addNoRecord(missing)
 
-			return nil
+			return failed
 		})
 	}
 
