@@ -41,6 +41,12 @@ const (
 	quickLaneReadConcurrency = 8
 )
 
+// quickLaneReadTimeout bounds one batch's read-back of positions, so a stalled read stores the
+// block without rows rather than holding it. A store that follows its context, as utxoset does,
+// stops there; Aerospike's batch reads are bounded by its own batch policy. A variable so a test
+// can shorten it.
+var quickLaneReadTimeout = 30 * time.Second
+
 // quickLanePositions collects the lane positions of one quick-validation attempt of one block. A
 // nil collection, which is what an attempt at off has, collects nothing.
 type quickLanePositions struct {
@@ -218,7 +224,10 @@ func (u *BlockValidation) readLanePositions(ctx context.Context, q *quickLanePos
 		return
 	}
 
-	g, gCtx := errgroup.WithContext(ctx)
+	readCtx, cancel := context.WithTimeout(ctx, quickLaneReadTimeout)
+	defer cancel()
+
+	g, gCtx := errgroup.WithContext(readCtx)
 	g.SetLimit(quickLaneReadConcurrency)
 
 	for start := 0; start < len(hashes); start += quickLaneReadChunk {

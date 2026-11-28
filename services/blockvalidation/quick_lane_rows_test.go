@@ -381,16 +381,23 @@ func TestQuickValidationLaneRowsAtOff(t *testing.T) {
 }
 
 // decorateFailingStore fails every BatchDecorate with whole, or, when whole is nil, every item
-// with item, and counts the calls when calls is set.
+// with item, and counts the calls when calls is set. With stall set it waits for its context first.
 type decorateFailingStore struct {
 	utxo.Store
 	whole, item error
 	calls       *atomic.Int32
+	stall       bool
 }
 
-func (s decorateFailingStore) BatchDecorate(_ context.Context, items []*utxo.UnresolvedMetaData, _ ...fields.FieldName) error {
+func (s decorateFailingStore) BatchDecorate(ctx context.Context, items []*utxo.UnresolvedMetaData, _ ...fields.FieldName) error {
 	if s.calls != nil {
 		s.calls.Add(1)
+	}
+
+	if s.stall {
+		<-ctx.Done()
+
+		return ctx.Err()
 	}
 
 	if s.whole != nil {
@@ -459,6 +466,18 @@ func TestQuickLanePositionsCollect(t *testing.T) {
 		require.Equal(t, failures+1, laneMetric(t, "teranode_lane_row_insert_failures_total", "", ""))
 		require.Equal(t, unpositioned+1, laneTxsWithoutPosition(t), "a record without a position is counted though the rows failed")
 	}
+
+	// A read that stalls ends at quickLaneReadTimeout, and the block goes without rows.
+	timeout := quickLaneReadTimeout
+	quickLaneReadTimeout = 50 * time.Millisecond
+
+	t.Cleanup(func() { quickLaneReadTimeout = timeout })
+
+	bv.utxoStore = decorateFailingStore{stall: true}
+	ctx = bv.withQuickLanePositions(context.Background())
+	quickLanePositionsFrom(ctx).add(lane.Pack(7, 1))
+	bv.readExistingLanePositions(ctx, quickLanePositionsFrom(ctx), []*chainhash.Hash{{0x01}})
+	require.Nil(t, bv.quickLaneRows(ctx, block))
 
 	// After a failed read no further chunk is read, in this batch or a later one.
 	var calls atomic.Int32
