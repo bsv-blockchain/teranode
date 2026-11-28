@@ -246,6 +246,13 @@ func (u *BlockValidation) readLanePositions(ctx context.Context, q *quickLanePos
 	for got := 0; got < chunks; got++ {
 		select {
 		case r := <-results:
+			// A result and the deadline can be ready together; one past the deadline does not count.
+			if err := readCtx.Err(); err != nil {
+				q.fail(err)
+
+				return
+			}
+
 			q.add(r.positions...)
 			q.addNoRecord(r.missing)
 
