@@ -165,6 +165,14 @@ func (q *quickLanePositions) fail(err error) {
 	q.mu.Unlock()
 }
 
+// hasFailed reports whether a read has failed.
+func (q *quickLanePositions) hasFailed() bool {
+	q.mu.Lock()
+	defer q.mu.Unlock()
+
+	return q.failed != nil
+}
+
 // flushLocked adds the pending positions to the per-lane bitmaps.
 func (q *quickLanePositions) flushLocked() {
 	for l, positions := range q.pending {
@@ -205,17 +213,22 @@ func (u *BlockValidation) readSkippedLanePositions(ctx context.Context, q *quick
 // quickLaneReadConcurrency at once. notFoundIsNoRecord counts a record not found as none rather
 // than as one without a position.
 func (u *BlockValidation) readLanePositions(ctx context.Context, q *quickLanePositions, hashes []*chainhash.Hash, notFoundIsNoRecord bool) {
-	if q == nil || len(hashes) == 0 {
+	// Once a read has failed the block goes without rows, so nothing more is read for it.
+	if q == nil || len(hashes) == 0 || q.hasFailed() {
 		return
 	}
 
 	g, gCtx := errgroup.WithContext(ctx)
 	g.SetLimit(quickLaneReadConcurrency)
 
-	for start := 0; start < len(hashes); start += quickLaneReadChunk {
+	for start := 0; start < len(hashes) && gCtx.Err() == nil; start += quickLaneReadChunk {
 		chunk := hashes[start:min(start+quickLaneReadChunk, len(hashes))]
 
 		g.Go(func() error {
+			if err := gCtx.Err(); err != nil {
+				return err
+			}
+
 			items := make([]*utxo.UnresolvedMetaData, 0, len(chunk))
 			for i, h := range chunk {
 				items = append(items, &utxo.UnresolvedMetaData{Hash: *h, Idx: i, Fields: []fields.FieldName{fields.LanePosition}})

@@ -384,13 +384,18 @@ func TestQuickValidationLaneRowsAtOff(t *testing.T) {
 }
 
 // decorateFailingStore fails every BatchDecorate with whole, or, when whole is nil, every item
-// with item.
+// with item, and counts the calls when calls is set.
 type decorateFailingStore struct {
 	utxo.Store
 	whole, item error
+	calls       *atomic.Int32
 }
 
 func (s decorateFailingStore) BatchDecorate(_ context.Context, items []*utxo.UnresolvedMetaData, _ ...fields.FieldName) error {
+	if s.calls != nil {
+		s.calls.Add(1)
+	}
+
 	if s.whole != nil {
 		return s.whole
 	}
@@ -455,6 +460,24 @@ func TestQuickLanePositionsCollect(t *testing.T) {
 		require.Nil(t, bv.quickLaneRows(ctx, block))
 		require.Equal(t, failures+1, laneMetric(t, "teranode_lane_row_insert_failures_total", "", ""))
 	}
+
+	// After a failed read no further chunk is read, in this batch or a later one.
+	var calls atomic.Int32
+
+	bv.utxoStore = decorateFailingStore{whole: errors.NewStorageError("decorate failed"), calls: &calls}
+	ctx = bv.withQuickLanePositions(context.Background())
+	hashes := make([]*chainhash.Hash, 40*quickLaneReadChunk)
+
+	for i := range hashes {
+		hashes[i] = &chainhash.Hash{byte(i), byte(i >> 8)}
+	}
+
+	bv.readExistingLanePositions(ctx, quickLanePositionsFrom(ctx), hashes)
+	require.LessOrEqual(t, calls.Load(), int32(2*quickLaneReadConcurrency), "the reads stop once one has failed")
+
+	before := calls.Load()
+	bv.readExistingLanePositions(ctx, quickLanePositionsFrom(ctx), hashes)
+	require.Equal(t, before, calls.Load(), "a later batch reads nothing")
 
 	// A record not found is one without a position; the rest of the rows still go.
 	bv.utxoStore = decorateFailingStore{item: errors.NewTxNotFoundError("gone")}
