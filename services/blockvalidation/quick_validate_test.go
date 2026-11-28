@@ -17,6 +17,7 @@ import (
 	"github.com/bsv-blockchain/teranode/model"
 	"github.com/bsv-blockchain/teranode/pkg/fileformat"
 	"github.com/bsv-blockchain/teranode/services/blockvalidation/testhelpers"
+	"github.com/bsv-blockchain/teranode/settings"
 	"github.com/bsv-blockchain/teranode/stores/blockchain/options"
 	"github.com/bsv-blockchain/teranode/stores/utxo"
 	"github.com/bsv-blockchain/teranode/stores/utxo/meta"
@@ -24,6 +25,7 @@ import (
 	"github.com/bsv-blockchain/teranode/test/utils/transactions"
 	"github.com/bsv-blockchain/teranode/ulogger"
 	"github.com/bsv-blockchain/teranode/util/expiringmap"
+	"github.com/bsv-blockchain/teranode/util/lane"
 	testutil "github.com/bsv-blockchain/teranode/util/test"
 	prometheustestutil "github.com/prometheus/client_golang/prometheus/testutil"
 	"github.com/stretchr/testify/assert"
@@ -1324,4 +1326,59 @@ func TestOutpointOnly_MetricIncrementsBelowOnly(t *testing.T) {
 		require.NoError(t, err)
 		require.Equal(t, before, prometheustestutil.ToFloat64(prometheusBlockValidationOutpointOnlyBlocks))
 	})
+}
+
+// At shadow both quick-validation entry points store the block with lane map rows built from the
+// positions its creates returned; at off they store none.
+func TestQuickValidateBlock_LaneRows(t *testing.T) {
+	entries := map[string]func(t *testing.T, s *CatchupTestSuite, block *model.Block) error{
+		"sync": func(_ *testing.T, s *CatchupTestSuite, block *model.Block) error {
+			return s.Server.blockValidation.quickValidateBlock(s.Ctx, block, "test", "")
+		},
+		"async": func(t *testing.T, s *CatchupTestSuite, block *model.Block) error {
+			_, _, err := s.Server.blockValidation.quickValidateBlockAsync(s.Ctx, block, "test", "", startTestSubtreeWriteWorker(t, s.Server.blockValidation))
+			return err
+		},
+	}
+
+	for name, entry := range entries {
+		for _, mode := range []settings.LaneMigration{settings.LaneMigrationShadow, settings.LaneMigrationOff} {
+			t.Run(name+" at "+string(mode), func(t *testing.T) {
+				suite := NewCatchupTestSuite(t)
+				defer suite.Cleanup()
+
+				suite.Server.blockValidation.settings.UtxoStore.LaneMigration = mode
+
+				// The block's first transaction has no parent in the list and gets one combined
+				// call; the second spends the first, so it is created first and spent after.
+				suite.MockUTXOStore.On("SpendAndCreate", mock.Anything, mock.Anything, mock.Anything, matchCombined()).
+					Return(&meta.Data{LanePosition: lane.Pack(7, 1)}, []*utxo.Spend{}, nil).Once()
+				suite.MockUTXOStore.On("SpendAndCreate", mock.Anything, mock.Anything, mock.Anything, matchCreateOnly()).
+					Return(&meta.Data{LanePosition: lane.Pack(7, 2)}, nil, nil).Once()
+				setupQuickValidateMocks(suite)
+
+				block := buildOneSubtreeBlock(t, suite, 100)
+				require.NoError(t, entry(t, suite, block))
+
+				var sbo options.StoreBlockOptions
+
+				for _, call := range suite.MockBlockchain.Calls {
+					if call.Method == "AddBlock" {
+						for _, opt := range call.Arguments.Get(3).([]options.StoreBlockOption) {
+							opt(&sbo)
+						}
+					}
+				}
+
+				if mode == settings.LaneMigrationOff {
+					require.Empty(t, sbo.LaneMapRows)
+					return
+				}
+
+				want, err := lane.BuildMapRows(7, lanePositions(1, 2))
+				require.NoError(t, err)
+				require.Equal(t, want, sbo.LaneMapRows)
+			})
+		}
+	}
 }

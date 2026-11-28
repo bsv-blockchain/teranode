@@ -20,7 +20,9 @@ import (
 	bloboptions "github.com/bsv-blockchain/teranode/stores/blob/options"
 	"github.com/bsv-blockchain/teranode/stores/blockchain/options"
 	"github.com/bsv-blockchain/teranode/stores/utxo"
+	"github.com/bsv-blockchain/teranode/stores/utxo/meta"
 	"github.com/bsv-blockchain/teranode/util"
+	"github.com/bsv-blockchain/teranode/util/lane"
 	"github.com/bsv-blockchain/teranode/util/retry"
 	"github.com/bsv-blockchain/teranode/util/tracing"
 	"golang.org/x/sync/errgroup"
@@ -328,6 +330,9 @@ func (u *BlockValidation) quickValidateBlock(ctx context.Context, block *model.B
 	)
 	defer deferFn()
 
+	// At shadow, collects the lane positions this attempt's records carry; see quickLaneRows.
+	ctx = u.withQuickLanePositions(ctx)
+
 	// The ONE boundary for a subtree blob whose nodes do not hash to its key. Written
 	// as a deferred rewrite of the named return rather than a call on each failure
 	// path, because the whole-block pass and all three processing variants return
@@ -502,6 +507,9 @@ func (u *BlockValidation) quickValidateBlockAsync(ctx context.Context, block *mo
 		tracing.WithLogMessage(u.logger, "[quickValidateBlockAsync][%s] performing async quick validation for checkpointed block at height %d", block.Hash().String(), block.Height),
 	)
 	defer deferFn()
+
+	// At shadow, collects the lane positions this attempt's records carry; see quickLaneRows.
+	ctx = u.withQuickLanePositions(ctx)
 
 	// The ONE boundary for a subtree blob whose nodes do not hash to its key — see
 	// the identical defer in quickValidateBlock (bitcoin-sv/teranode#4838). By the
@@ -732,13 +740,19 @@ func (u *BlockValidation) commitBlock(ctx context.Context, block *model.Block, p
 
 	start := time.Now()
 
-	if err := u.blockchainClient.AddBlock(ctx,
-		block,
-		peerID,
+	addOpts := []options.StoreBlockOption{
 		options.WithSubtreesSet(true),
 		options.WithMinedSet(true),
 		options.WithID(uint64(block.ID)),
-	); err != nil {
+	}
+
+	// At utxostore_laneMigration shadow the block's lane map rows, built from the positions of
+	// the records this attempt wrote or found, and stored in the block's own transaction.
+	if rows := u.quickLaneRows(ctx, block); rows != nil {
+		addOpts = append(addOpts, options.WithLaneMapRows(rows))
+	}
+
+	if err := u.blockchainClient.AddBlock(ctx, block, peerID, addOpts...); err != nil {
 		// An AddBlock error does not prove the block was not stored: a deadline or cancel can reach
 		// the client after the blockchain server committed it. Treating a stored block as a local
 		// fault would let tryQuickValidation delete the .subtree files of a block recorded as
@@ -2593,6 +2607,14 @@ func (u *BlockValidation) createAndSpendUTXOsForBatch(ctx context.Context, block
 		applyErr = u.spendBatchWithRetry(ctx, block, unspendableTxs, outpointOnly)
 	}
 
+	lanes := quickLanePositionsFrom(ctx)
+
+	if applyErr == nil {
+		// They are stored without a record, so they take no lane position and the rows leave
+		// them out.
+		lanes.addNoRecord(len(unspendableTxs))
+	}
+
 	// Logged on the failure path too: how long the list ran for is the first thing anyone
 	// reading the log wants.
 	u.logger.Infof("[createAndSpendUTXOsForBatch][%s] batch %d-%d applied: listed=%d unspendable=%d existing=%d (list=%v, total=%v, err=%v)",
@@ -2626,6 +2648,10 @@ func (u *BlockValidation) createAndSpendUTXOsForBatch(ctx context.Context, block
 			u.settings.UtxoStore.MaxMinedBatchSize, u.settings.UtxoStore.MaxMinedRoutines); err != nil {
 			return errors.NewProcessingError("[createAndSpendUTXOsForBatch][%s] failed to update mined info for %d existing txs in subtree %d", block.Hash().String(), len(hashes), subtreeIdx, err)
 		}
+
+		// The lane position the store took for an existing transaction on this attempt was
+		// burned, so its record's own position is read back for the block's rows.
+		u.readExistingLanePositions(ctx, lanes, hashes)
 	}
 
 	return nil
@@ -2945,6 +2971,11 @@ func (u *BlockValidation) applyList(ctx context.Context, block *model.Block, txs
 			return errors.NewProcessingError("[applyList][%s] SpendAndCreateMulti returned %d results for %d transactions", block.Hash().String(), len(results), len(txs))
 		}
 
+		// At shadow, the positions of the records this pass created, for the block's rows. A
+		// pass that fails part-way still created those records, and a later pass reports them
+		// existing without collecting them again (carried) or reads them back (collectExisting).
+		quickLanePositionsFrom(ctx).addCreated(results)
+
 		// A retryable failure keeps its transaction for the next pass, and so does every
 		// transaction the store failed or skipped beside it, including the children it failed
 		// as ParentFailed, which are not retryable on their own. With no retryable failure, the
@@ -3076,7 +3107,10 @@ func (u *BlockValidation) applyOneByOne(ctx context.Context, block *model.Block,
 	storeCallBound := u.detachedStoreCallBound()
 
 	for i, tx := range txs {
-		var err error
+		var (
+			err     error
+			created *meta.Data
+		)
 
 		// A transient store error is retried, as the per-transaction waves retried it; a
 		// repeat of the same transaction is accepted as the same spends and create.
@@ -3093,7 +3127,7 @@ func (u *BlockValidation) applyOneByOne(ctx context.Context, block *model.Block,
 			// combined call cancelled between its spend and its create would leave the
 			// create's outcome unknown.
 			callCtx, cancel := context.WithTimeout(context.WithoutCancel(ctx), storeCallBound)
-			_, _, err = u.utxoStore.SpendAndCreate(callCtx, tx, block.Height,
+			created, _, err = u.utxoStore.SpendAndCreate(callCtx, tx, block.Height,
 				utxo.WithMinedBlockInfo(utxo.MinedBlockInfo{BlockID: block.ID, BlockHeight: block.Height, SubtreeIdx: subtreeIdxs[i]}),
 				utxo.WithLocked(lockUTXOs),
 				utxo.WithIgnoreLocked(true),
@@ -3110,6 +3144,12 @@ func (u *BlockValidation) applyOneByOne(ctx context.Context, block *model.Block,
 
 		switch {
 		case err == nil:
+			position := lane.None
+			if created != nil {
+				position = created.LanePosition
+			}
+
+			quickLanePositionsFrom(ctx).add(position)
 		case errors.Is(err, errors.ErrTxExists):
 			collectExisting(tx, subtreeIdxs[i])
 		default:

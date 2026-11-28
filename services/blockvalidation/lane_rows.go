@@ -65,18 +65,21 @@ func (u *BlockValidation) laneRows(ctx context.Context, block *model.Block) []la
 
 	lane.ObserveGate(lane.BlockPeer, lane.GateStageBuild, time.Since(start))
 	lane.ObserveBlockRows(lane.BlockPeer, rows)
-	u.checkLaneRowCount(block, rows.Members)
+	u.checkLaneRowCount(block, rows.Members, 0)
 
 	return rows.Rows
 }
 
 // checkLaneRowCount compares the members of a block's rows with its transactions less the
-// coinbase, which takes no position from a lane, and counts and logs a difference.
-func (u *BlockValidation) checkLaneRowCount(block *model.Block, members uint64) {
+// coinbase, which the rows leave out, and less withoutRecord, the transactions the block was stored
+// without a record for, and counts and logs a difference.
+func (u *BlockValidation) checkLaneRowCount(block *model.Block, members, withoutRecord uint64) {
 	var want uint64
 	if block.TransactionCount > 0 {
 		want = block.TransactionCount - 1
 	}
+
+	want -= min(want, withoutRecord)
 
 	if members == want {
 		return
@@ -88,7 +91,7 @@ func (u *BlockValidation) checkLaneRowCount(block *model.Block, members uint64) 
 	}
 
 	lane.CountRowMismatch(lane.BlockPeer, direction)
-	u.logger.Warnf("[laneRows][%s] lane rows hold %d members, the block has %d transactions besides its coinbase", block.Hash().String(), members, want)
+	u.logger.Warnf("[laneRows][%s] lane rows hold %d members, the block has %d transactions with a record besides its coinbase", block.Hash().String(), members, want)
 }
 
 // Outcomes of one subtree's lane bitmaps read.
