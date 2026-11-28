@@ -390,11 +390,17 @@ type decorateFailingStore struct {
 	// late, with stall, answers without error once the context has ended, as a store that does
 	// not follow its context answers after the bound.
 	late bool
+	// deadline, when set, records the deadline of the context the store was given.
+	deadline *time.Time
 }
 
 func (s decorateFailingStore) BatchDecorate(ctx context.Context, items []*utxo.UnresolvedMetaData, _ ...fields.FieldName) error {
 	if s.calls != nil {
 		s.calls.Add(1)
+	}
+
+	if s.deadline != nil {
+		*s.deadline, _ = ctx.Deadline()
 	}
 
 	if s.stall {
@@ -483,13 +489,15 @@ func TestQuickLanePositionsCollect(t *testing.T) {
 
 	t.Cleanup(func() { quickLaneReadTimeout = timeout })
 
-	bv.utxoStore = decorateFailingStore{stall: true}
+	var deadline time.Time
+
+	bv.utxoStore = decorateFailingStore{stall: true, deadline: &deadline}
 	ctx = bv.withQuickLanePositions(context.Background())
 	quickLanePositionsFrom(ctx).add(lane.Pack(7, 1))
 
 	start := time.Now()
 	bv.readExistingLanePositions(ctx, quickLanePositionsFrom(ctx), []*chainhash.Hash{{0x01}})
-	require.Less(t, time.Since(start), 500*time.Millisecond, "the stalled read ends at the bound")
+	require.WithinDuration(t, start.Add(quickLaneReadTimeout), deadline, 20*time.Millisecond, "the store is given the bound")
 	require.Nil(t, bv.quickLaneRows(ctx, block))
 
 	bv.utxoStore = decorateFailingStore{stall: true, late: true}

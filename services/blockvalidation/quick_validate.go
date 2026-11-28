@@ -2607,29 +2607,6 @@ func (u *BlockValidation) createAndSpendUTXOsForBatch(ctx context.Context, block
 		applyErr = u.spendBatchWithRetry(ctx, block, unspendableTxs, outpointOnly)
 	}
 
-	lanes := quickLanePositionsFrom(ctx)
-
-	// The batch's read-backs of lane positions share one deadline (quickLaneReadTimeout).
-	laneCtx := ctx
-
-	if lanes != nil {
-		var cancelLane context.CancelFunc
-
-		laneCtx, cancelLane = context.WithTimeout(ctx, quickLaneReadTimeout)
-		defer cancelLane()
-	}
-
-	if applyErr == nil && lanes != nil && len(unspendableTxs) > 0 {
-		// They are stored without a record, so they take no lane position and the rows leave them
-		// out, unless one was stored before; see readSkippedLanePositions.
-		skipped := make([]*chainhash.Hash, len(unspendableTxs))
-		for i, tx := range unspendableTxs {
-			skipped[i] = tx.TxIDChainHash()
-		}
-
-		u.readSkippedLanePositions(laneCtx, lanes, skipped)
-	}
-
 	// Logged on the failure path too: how long the list ran for is the first thing anyone
 	// reading the log wants.
 	u.logger.Infof("[createAndSpendUTXOsForBatch][%s] batch %d-%d applied: listed=%d unspendable=%d existing=%d (list=%v, total=%v, err=%v)",
@@ -2663,13 +2640,39 @@ func (u *BlockValidation) createAndSpendUTXOsForBatch(ctx context.Context, block
 			u.settings.UtxoStore.MaxMinedBatchSize, u.settings.UtxoStore.MaxMinedRoutines); err != nil {
 			return errors.NewProcessingError("[createAndSpendUTXOsForBatch][%s] failed to update mined info for %d existing txs in subtree %d", block.Hash().String(), len(hashes), subtreeIdx, err)
 		}
-
-		// The lane position the store took for an existing transaction on this attempt was
-		// burned, so its record's own position is read back for the block's rows.
-		u.readExistingLanePositions(laneCtx, lanes, hashes)
 	}
 
+	u.readBatchLanePositions(ctx, existingTxHashes, unspendableTxs)
+
 	return nil
+}
+
+// readBatchLanePositions reads back, at shadow, the lane positions of a batch's records that the
+// store did not create on this attempt, under one deadline (quickLaneReadTimeout). The position
+// the store took for an existing transaction was burned, so its record's own is read; a
+// transaction skipped as unspendable has a record only if it was stored before
+// (readSkippedLanePositions).
+func (u *BlockValidation) readBatchLanePositions(ctx context.Context, existing map[int][]*chainhash.Hash, skippedTxs []*bt.Tx) {
+	lanes := quickLanePositionsFrom(ctx)
+	if lanes == nil || (len(existing) == 0 && len(skippedTxs) == 0) {
+		return
+	}
+
+	laneCtx, cancel := context.WithTimeout(ctx, quickLaneReadTimeout)
+	defer cancel()
+
+	if len(skippedTxs) > 0 {
+		skipped := make([]*chainhash.Hash, len(skippedTxs))
+		for i, tx := range skippedTxs {
+			skipped[i] = tx.TxIDChainHash()
+		}
+
+		u.readSkippedLanePositions(laneCtx, lanes, skipped)
+	}
+
+	for _, hashes := range existing {
+		u.readExistingLanePositions(laneCtx, lanes, hashes)
+	}
 }
 
 // txApply is one transaction applyTxsWithRetry has to apply.
