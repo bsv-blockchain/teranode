@@ -180,10 +180,6 @@ func (q *quickLanePositions) hasFailed() bool {
 // flushLocked adds the pending positions to the per-lane bitmaps.
 func (q *quickLanePositions) flushLocked() {
 	for l, positions := range q.pending {
-		if len(positions) == 0 {
-			continue
-		}
-
 		bm := q.lanes[l]
 		if bm == nil {
 			bm = roaring64.New()
@@ -279,7 +275,7 @@ func (u *BlockValidation) quickLaneReadSlots() chan struct{} {
 }
 
 // dispatchLaneReads starts one read per chunk of hashes, each once it holds a slot, and stops when
-// readCtx ends. It and each read check readCtx before the store call, so a read that starts as the
+// readCtx ends. Each read checks readCtx before the store call, so a read that starts as the
 // deadline passes is the only one that can still reach the store.
 func (u *BlockValidation) dispatchLaneReads(readCtx context.Context, hashes []*chainhash.Hash, notFoundIsNoRecord bool, results chan<- laneChunkRead) {
 	slots := u.quickLaneReadSlots()
@@ -290,13 +286,6 @@ func (u *BlockValidation) dispatchLaneReads(readCtx context.Context, hashes []*c
 		select {
 		case slots <- struct{}{}:
 		case <-readCtx.Done():
-			return
-		}
-
-		// A slot that came free as the deadline passed can win the select above.
-		if readCtx.Err() != nil {
-			<-slots
-
 			return
 		}
 

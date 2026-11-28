@@ -551,6 +551,26 @@ func TestQuickLanePositionsCollect(t *testing.T) {
 		return !quickLanePositionsFrom(ctx).hasFailed()
 	}, time.Second, 10*time.Millisecond, "the slots serve again")
 
+	// A read whose deadline has already passed reaches no store.
+	var none atomic.Int32
+
+	bv = &BlockValidation{logger: ulogger.TestLogger{}, settings: tSettings, utxoStore: decorateFailingStore{calls: &none}}
+	expired, cancelExpired := context.WithCancel(bv.withQuickLanePositions(context.Background()))
+	cancelExpired()
+
+	for range 20 {
+		bv.readExistingLanePositions(expired, &quickLanePositions{pending: map[uint8][]uint64{}, lanes: lane.LaneBitmaps{}}, stuckHashes[:3*quickLaneReadChunk])
+	}
+
+	time.Sleep(50 * time.Millisecond)
+	require.Zero(t, none.Load(), "no store call after the deadline")
+
+	// A coinbase-only block has nothing to build and records no gate time.
+	gates := laneMetric(t, "teranode_lane_gate_seconds", "stage", lane.GateStageBuild)
+	ctx = bv.withQuickLanePositions(context.Background())
+	require.Nil(t, bv.quickLaneRows(ctx, &model.Block{TransactionCount: 1}))
+	require.Equal(t, gates, laneMetric(t, "teranode_lane_gate_seconds", "stage", lane.GateStageBuild))
+
 	// After a failed read no further chunk is read, in this batch or a later one. The first read
 	// fails; the rest hold until released, so the reads in flight are the slots' worth.
 	var calls atomic.Int32
