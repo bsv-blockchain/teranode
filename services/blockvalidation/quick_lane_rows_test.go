@@ -370,13 +370,23 @@ func TestQuickValidationLaneRowsAtOff(t *testing.T) {
 	require.Nil(t, bv.quickLaneRows(ctx, &model.Block{Subtrees: []*chainhash.Hash{{}}, TransactionCount: 2}))
 }
 
-// decorateFailingStore fails every BatchDecorate.
+// decorateFailingStore fails every BatchDecorate with whole, or, when whole is nil, every item
+// with item.
 type decorateFailingStore struct {
 	utxo.Store
+	whole, item error
 }
 
-func (decorateFailingStore) BatchDecorate(context.Context, []*utxo.UnresolvedMetaData, ...fields.FieldName) error {
-	return errors.NewStorageError("decorate failed")
+func (s decorateFailingStore) BatchDecorate(_ context.Context, items []*utxo.UnresolvedMetaData, _ ...fields.FieldName) error {
+	if s.whole != nil {
+		return s.whole
+	}
+
+	for _, it := range items {
+		it.Err = s.item
+	}
+
+	return nil
 }
 
 // The collection takes created records only, counts a record without a position, holds its
@@ -418,15 +428,31 @@ func TestQuickLanePositionsCollect(t *testing.T) {
 	require.Equal(t, unpositioned+1, laneTxsWithoutPosition(t), "the created record without a position")
 	require.Equal(t, fewer+1, laneMetric(t, "teranode_lane_row_count_mismatches_total", "direction", lane.MismatchFewer))
 
-	bv.utxoStore = decorateFailingStore{}
-	failures := laneMetric(t, "teranode_lane_row_insert_failures_total", "", "")
+	for _, store := range []decorateFailingStore{
+		{whole: errors.NewStorageError("decorate failed")},
+		{item: errors.NewStorageError("record unreadable")},
+	} {
+		bv.utxoStore = store
+		failures := laneMetric(t, "teranode_lane_row_insert_failures_total", "", "")
+
+		ctx = bv.withQuickLanePositions(context.Background())
+		quickLanePositionsFrom(ctx).add(lane.Pack(7, 1))
+		bv.readExistingLanePositions(ctx, quickLanePositionsFrom(ctx), []*chainhash.Hash{{0x01}})
+
+		require.Nil(t, bv.quickLaneRows(ctx, block))
+		require.Equal(t, failures+1, laneMetric(t, "teranode_lane_row_insert_failures_total", "", ""))
+	}
+
+	// A record not found is one without a position; the rest of the rows still go.
+	bv.utxoStore = decorateFailingStore{item: errors.NewTxNotFoundError("gone")}
+	unpositioned = laneTxsWithoutPosition(t)
 
 	ctx = bv.withQuickLanePositions(context.Background())
 	quickLanePositionsFrom(ctx).add(lane.Pack(7, 1))
 	bv.readExistingLanePositions(ctx, quickLanePositionsFrom(ctx), []*chainhash.Hash{{0x01}})
 
-	require.Nil(t, bv.quickLaneRows(ctx, block))
-	require.Equal(t, failures+1, laneMetric(t, "teranode_lane_row_insert_failures_total", "", ""))
+	require.Equal(t, rowsOf(t, []uint64{lane.Pack(7, 1)}), bv.quickLaneRows(ctx, block))
+	require.Equal(t, unpositioned+1, laneTxsWithoutPosition(t))
 }
 
 // laneTxsWithoutPosition is teranode_lane_txs_without_position_total for quick validation.
@@ -484,10 +510,8 @@ func laneServiceMetric(t *testing.T, metric, service string) float64 {
 	return sum
 }
 
-// A block quick validation stored at shadow is a block like any other to the lane reader and the
-// pruner's lane rule: commitBlock stores its rows with it, the reader loads them, answers its
-// transactions mined once the block is deep enough, and the pruner settles a parent of it spent
-// in it.
+// commitBlock stores a quick-validated block's rows, so the lane reader answers its transactions
+// mined once it is deep enough, and the pruner's lane rule settles a parent of it spent in it.
 func TestQuickValidatedBlockThroughTheLaneReaderAndPruner(t *testing.T) {
 	initPrometheusMetrics()
 
@@ -610,10 +634,8 @@ func quickLaneCoinbaseKey(t *testing.T) *bec.PublicKey {
 	return publicKey
 }
 
-// TestQuickValidationTakesARangesPositionsWithoutStalling takes, from a cold allocator on the
-// blockchain service's own lease store at the default grant settings, the positions of four netted
-// ranges back to back, as quick validation does for a block of 262,144 transactions, and requires no
-// take to fail or wait anywhere near takeWait. It logs the grants and the longest take.
+// A cold allocator at the default grant settings hands out four netted ranges' positions back to
+// back, as quick validation takes them, with no take failing or waiting near the 5 s take wait.
 func TestQuickValidationTakesARangesPositionsWithoutStalling(t *testing.T) {
 	tSettings := testutil.CreateBaseTestSettings(t)
 	logger := ulogger.TestLogger{}
@@ -662,11 +684,8 @@ func TestQuickValidationTakesARangesPositionsWithoutStalling(t *testing.T) {
 	require.Less(t, longest, time.Second, "no take waits anywhere near the allocator's 5 s take wait")
 }
 
-// BenchmarkQuickLaneRows is the cost quick validation adds per block at shadow, on blocks the size
-// of mainnet's largest below the checkpoint: 635,141 (1,324,314 transactions, the largest of 2019 to
-// 2021) and 804,142 (7,126,502). Each list of 65,536 results is collected as the store hands it
-// back, positions consecutive in one lane with a hole every 10,000, and the rows are built at the
-// commit. heap-MB is what the collection holds when the rows are built; row-bytes is what they store.
+// BenchmarkQuickLaneRows is what quick validation adds per block at shadow, on blocks the size of
+// mainnet blocks 635,141 and 804,142, the largest of 2019 to 2021 and the largest below 945,000.
 func BenchmarkQuickLaneRows(b *testing.B) {
 	tSettings := testutil.CreateBaseTestSettings(b)
 	tSettings.UtxoStore.LaneMigration = settings.LaneMigrationShadow

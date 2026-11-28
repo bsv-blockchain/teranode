@@ -7,6 +7,7 @@ import (
 
 	"github.com/RoaringBitmap/roaring/v2/roaring64"
 	"github.com/bsv-blockchain/go-bt/v2/chainhash"
+	"github.com/bsv-blockchain/teranode/errors"
 	"github.com/bsv-blockchain/teranode/model"
 	"github.com/bsv-blockchain/teranode/stores/utxo"
 	"github.com/bsv-blockchain/teranode/stores/utxo/fields"
@@ -24,10 +25,10 @@ import (
 // coinbase left out, since block assembly creates it. A redone block reads back every record the
 // first attempt wrote, so it gets the same rows and no record a second position.
 
-// quickLanePendingMax is how many positions a block's collection holds unsorted before it adds them
-// to its per-lane bitmaps. A block's positions come from one grant or a few, so the bitmaps hold
-// runs and stay small however many transactions the block has; the pending positions are what
-// bounds the memory, at 8 bytes each.
+// quickLanePendingMax is how many positions a block's collection holds unsorted, at 8 bytes each,
+// before it adds them to its per-lane bitmaps. The bitmaps' own size depends on how the positions
+// spread: those a block's creates take are near-consecutive runs, but a record read back keeps the
+// position it was first written with, anywhere in any lane.
 const quickLanePendingMax = 1 << 16
 
 // quickLaneReadChunk is how many records one read of existing records' positions asks for.
@@ -178,10 +179,10 @@ func (q *quickLanePositions) flushLocked() {
 	q.npending = 0
 }
 
-// readExisting reads back the lane position of each transaction in hashes, ones whose record
-// already existed, and records it. A record not found, or one without a valid position, counts as
-// unpositioned. A read that fails is recorded and the block goes without rows: at shadow nothing
-// may stop a block.
+// readExistingLanePositions reads back the lane position of each transaction in hashes, ones whose
+// record already existed, and records it. A record not found, or one without a valid position,
+// counts as unpositioned. A read that fails, whole or for one record, is recorded and the block goes
+// without rows: at shadow nothing may stop a block.
 func (u *BlockValidation) readExistingLanePositions(ctx context.Context, q *quickLanePositions, hashes []*chainhash.Hash) {
 	if q == nil || len(hashes) == 0 {
 		return
@@ -204,7 +205,12 @@ func (u *BlockValidation) readExistingLanePositions(ctx context.Context, q *quic
 		positions := make([]uint64, len(items))
 
 		for i, it := range items {
-			if it.Err == nil && it.Data != nil {
+			switch {
+			case it.Err != nil && !errors.Is(it.Err, errors.ErrTxNotFound):
+				q.fail(it.Err)
+
+				return
+			case it.Err == nil && it.Data != nil:
 				positions[i] = it.Data.LanePosition
 			}
 		}
